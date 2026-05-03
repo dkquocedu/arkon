@@ -16,18 +16,49 @@ Arkon treats Claude as a managed organizational resource — not a public chatbo
 
 ---
 
+## How it works
+
+When a document is uploaded, Arkon doesn't just index it — it **compiles** it. An LLM reads the document and writes structured knowledge into a persistent wiki: entity pages, concept pages, topic summaries, all interlinked with `[[wikilinks]]`. Each new document updates and enriches the same wiki rather than adding isolated chunks.
+
+When an employee's Claude queries Arkon, it reads from the compiled wiki — synthesized knowledge, not raw fragments. The wiki accumulates and improves with every document added.
+
+```
+Upload document
+      │
+      ▼
+[Extract text + images]  ──→  vision captions inlined
+      │
+      ▼
+[LLM Wiki Compiler]
+  · Reads existing wiki index
+  · Creates / updates wiki pages
+  · Links related concepts via [[wikilinks]]
+      │
+      ▼
+[Wiki stored in PostgreSQL]
+  slug, title, content_md, summary
+  knowledge_type_slugs[], source_ids[]
+  embedding (pgvector)
+      │
+      ▼
+Claude queries via MCP  ──→  reads compiled wiki, not raw chunks
+```
+
+---
+
 ## Features
 
-### Knowledge Base
-Upload documents (PDF, DOCX, spreadsheets, URLs) and they become semantically searchable by Claude. Knowledge is chunked, embedded, and stored with pgvector. Retrieval is contextual — Claude queries the knowledge base at runtime via MCP, not from a pasted wall of text.
+### Knowledge Wiki
+Upload documents (PDF, DOCX, spreadsheets, URLs) and an LLM compiles them into a structured wiki. Knowledge compounds over time — later documents enrich existing wiki pages rather than creating duplicate entries.
 
 - Organize by **knowledge type** (SOP, Product, HR Policy, etc.) — admin-defined
 - Assign documents to **departments** for scoped access
-- Background ingestion pipeline with real-time progress tracking
-- Optional graph entity extraction via Neo4j
+- Background compilation pipeline with real-time progress tracking
+- Employee contribution tracking — every document attributed to its uploader
+- Re-compile any document on demand
 
 ### Access Control (RBAC)
-Fine-grained access at department and individual level. When an employee connects via MCP, Arkon resolves their identity, department, and knowledge scope — then filters what they can query.
+Fine-grained access at department and individual level. When an employee connects via MCP, Arkon resolves their identity, department, and knowledge scope — then filters which wiki pages they can read.
 
 ```
 Sales dept     → knowledge: product catalog, customer profiles
@@ -36,22 +67,41 @@ HR dept        → knowledge: internal policies, org structure
 Individual     → personal scope override if needed
 ```
 
+Wiki pages synthesized from multiple sources inherit the union of their contributing knowledge types — a page is visible if the employee has access to at least one of its types.
+
 ### Projects
 Cross-functional knowledge contexts for initiatives that don't fit neatly into a department.
 
 Create a **Project** (client engagement, product launch, board prep) → add members from any department → attach relevant documents. Project members get access to those documents through MCP automatically. When the project ends, archive it.
 
 ### MCP Server
-Employees connect Claude Desktop to Arkon's MCP server using a personal token. Tools available in Claude:
+Employees connect Claude Desktop to Arkon's MCP server using a personal token. Claude has two layers of access:
+
+**Wiki layer** — compiled, synthesized knowledge:
 
 | Tool | Description |
 |---|---|
-| `search_knowledge` | Semantic search across accessible documents |
-| `get_document` | Retrieve full document content |
-| `list_sources` | Browse available documents |
-| `list_categories` | Browse knowledge type tree |
+| `search_wiki` | Semantic search across the knowledge wiki (RBAC filtered) |
+| `read_wiki_index` | Browse the full wiki catalog |
+| `read_wiki_page` | Read a specific wiki page with backlinks |
+| `list_wiki_pages` | Filter pages by type or knowledge category |
+
+**Source layer** — raw document drill-down for precise citations:
+
+| Tool | Description |
+|---|---|
+| `list_sources` | Browse uploaded source documents |
+| `get_source` | Document metadata and status |
+| `get_source_outline` | Table of contents tree (headings-based) |
+| `get_source_pages` | Raw text for specific page range (e.g. `"5-7"`) |
+
+**Directory:**
+
+| Tool | Description |
+|---|---|
 | `find_contacts` | Search the internal people directory |
-| `get_category_knowledge` | Retrieve all docs of a specific type |
+| `list_knowledge_types` | Browse knowledge categories |
+| `get_knowledge_type_docs` | All documents of a specific category |
 
 ---
 
@@ -64,7 +114,7 @@ Employees connect Claude Desktop to Arkon's MCP server using a personal token. T
 │  ┌───────────────┐    ┌────────────────────────┐  │
 │  │  Admin Portal │    │    Arkon API + MCP     │  │
 │  │               │    │                        │  │
-│  │  · Knowledge  │───▶│  · Knowledge Graph     │  │
+│  │  · Knowledge  │───▶│  · LLM Wiki Compiler   │  │
 │  │  · RBAC       │    │  · Scope Resolution    │  │
 │  │  · Projects   │    │  · MCP Tool Server     │  │
 │  │  · Contacts   │    │  · Auth & Tokens       │  │
@@ -81,8 +131,8 @@ Employees connect Claude Desktop to Arkon's MCP server using a personal token. T
 **Stack:**
 - **Backend** — FastAPI, PostgreSQL + pgvector, Redis (arq), MinIO
 - **Frontend** — Next.js, Tailwind CSS
-- **Optional** — Neo4j for knowledge graph entity extraction
-- **Outbound** — Claude API (Anthropic) only. No other external calls.
+- **AI** — provider-agnostic: Google, OpenAI, or Anthropic for embedding, LLM, and vision
+- **Outbound** — configured AI provider only. No other external calls.
 
 ---
 
@@ -91,7 +141,7 @@ Employees connect Claude Desktop to Arkon's MCP server using a personal token. T
 ### Prerequisites
 
 - Docker and Docker Compose
-- A Claude API key from [Anthropic](https://console.anthropic.com)
+- An API key for your AI provider (Google, OpenAI, or Anthropic)
 
 ### 1. Clone and configure
 
@@ -121,9 +171,13 @@ This starts PostgreSQL, Redis, MinIO, the API server, the background worker, and
 
 Open the admin portal at `http://localhost:3000` and log in with the credentials from your `.env`.
 
-Go to **Settings** and configure your embedding model, LLM, and (optionally) vision model. Arkon supports Google, OpenAI, and Anthropic providers.
+Go to **Settings** and configure your embedding model, LLM, and (optionally) vision model. The LLM is used for wiki compilation — choose a model with a large context window (e.g. `gemini-2.5-pro`, `gpt-4o`, `claude-sonnet-4-5`).
 
-### 4. Connect an employee to Claude
+### 4. Upload knowledge
+
+Go to **Knowledge Base** and upload your first document. Arkon will extract text, analyze images, and compile the content into your wiki. Progress is shown in real time.
+
+### 5. Connect an employee to Claude
 
 1. Create a department and employee account in the portal
 2. Generate an MCP token for the employee (`Employees → Token`)
@@ -142,7 +196,7 @@ Go to **Settings** and configure your embedding model, LLM, and (optionally) vis
 }
 ```
 
-The employee opens Claude Desktop — knowledge and context for their scope are available immediately.
+The employee opens Claude Desktop — the compiled wiki for their scope is available immediately.
 
 ---
 
@@ -151,12 +205,12 @@ The employee opens Claude Desktop — knowledge and context for their scope are 
 ```
 arkon/
 ├── app/
-│   ├── routers/          # API endpoints (sources, rbac, projects, ...)
-│   ├── services/         # Auth, MCP auth, KB ingestion, storage
-│   ├── database/         # SQLAlchemy models, vector search, repository
-│   ├── ai/               # Provider-agnostic embedding, LLM, vision
+│   ├── routers/          # API endpoints (sources, wiki, rbac, projects, ...)
+│   ├── services/         # Auth, MCP auth, wiki CRUD, source outline, storage
+│   ├── database/         # SQLAlchemy models, repository
+│   ├── ai/               # Provider-agnostic LLM, embedding, vision + wiki compiler
 │   ├── mcp/              # MCP server, tools, resources
-│   └── worker.py         # Background ingestion jobs (arq)
+│   └── worker.py         # Background ingestion + wiki compilation jobs (arq)
 ├── frontend/
 │   └── src/
 │       ├── app/(portal)/ # Admin portal pages
@@ -168,13 +222,17 @@ arkon/
 
 ## Roadmap
 
-- [x] MCP Server with scoped knowledge retrieval
-- [x] Document ingestion pipeline (PDF, DOCX, URLs, images)
+- [x] MCP Server with scoped knowledge access
+- [x] Document ingestion pipeline (PDF, DOCX, URLs, images with vision captions)
+- [x] LLM Wiki Compiler — documents compiled into persistent, interlinked wiki pages
 - [x] Knowledge types and department-level RBAC
 - [x] Project contexts for cross-functional access
 - [x] Admin portal UI
 - [x] Contacts directory
-- [ ] Employee knowledge contribution (flag, annotate, suggest)
+- [x] Employee contribution tracking (document attribution)
+- [x] Raw source drill-down via MCP (outline + page-level citations)
+- [ ] Wiki browser in admin portal (read, search, graph view)
+- [ ] Employee knowledge contribution (suggest edits, flag outdated content)
 - [ ] Audit logs and usage analytics
 - [ ] SSO (Active Directory, Google Workspace, SAML)
 - [ ] Arkon CLI for one-command employee setup
