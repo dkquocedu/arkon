@@ -8,6 +8,8 @@ import {
   forceManyBody,
   forceCenter,
   forceCollide,
+  forceX,
+  forceY,
   SimulationNodeDatum,
   SimulationLinkDatum,
 } from "d3-force";
@@ -151,6 +153,7 @@ export function WikiGraph({
   // Zoom & pan state
   const [zoom, setZoom] = React.useState(1);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [settled, setSettled] = React.useState(false);
   const isPanningRef = React.useRef(false);
   const panStartRef = React.useRef({ x: 0, y: 0, panX: 0, panY: 0 });
 
@@ -196,12 +199,12 @@ export function WikiGraph({
     // Identify new nodes not already in the simulation
     const newInputs = rawNodes.filter((n) => !knownSlugsRef.current.has(n.slug));
     if (newInputs.length === 0 && simulationRef.current) {
-      // Only dimension change — update center force and reheat slightly
-      const centerForce = simulationRef.current.force("center") as ReturnType<typeof forceCenter> | undefined;
-      if (centerForce) {
-        centerForce.x(dimensions.w / 2).y(dimensions.h / 2);
-        simulationRef.current.alpha(0.1).restart();
-      }
+      // Only dimension change — update forceX/Y targets and reheat slightly
+      const fx = simulationRef.current.force("x") as ReturnType<typeof forceX> | undefined;
+      const fy = simulationRef.current.force("y") as ReturnType<typeof forceY> | undefined;
+      if (fx) fx.x(dimensions.w / 2);
+      if (fy) fy.y(dimensions.h / 2);
+      simulationRef.current.alpha(0.1).restart();
       return;
     }
 
@@ -270,6 +273,48 @@ export function WikiGraph({
     const nodes = nodesRef.current;
     const links = linksRef.current;
 
+    // --- Detect connected components via BFS to separate clusters ---
+    const slugToComponent = new Map<string, number>();
+    let componentId = 0;
+    const adjacency = new Map<string, Set<string>>();
+    for (const n of nodes) adjacency.set(n.slug, new Set());
+    for (const l of links) {
+      const s = typeof l.source === "string" ? l.source : (l.source as GraphNode).slug;
+      const t = typeof l.target === "string" ? l.target : (l.target as GraphNode).slug;
+      adjacency.get(s)?.add(t);
+      adjacency.get(t)?.add(s);
+    }
+    for (const n of nodes) {
+      if (slugToComponent.has(n.slug)) continue;
+      const queue = [n.slug];
+      while (queue.length > 0) {
+        const cur = queue.pop()!;
+        if (slugToComponent.has(cur)) continue;
+        slugToComponent.set(cur, componentId);
+        for (const neighbor of adjacency.get(cur) ?? []) {
+          if (!slugToComponent.has(neighbor)) queue.push(neighbor);
+        }
+      }
+      componentId++;
+    }
+
+    // Compute per-component target X positions (spread across canvas)
+    const numComponents = componentId;
+    const componentTargetX = new Map<number, number>();
+    for (let i = 0; i < numComponents; i++) {
+      const margin = dimensions.w * 0.15;
+      componentTargetX.set(
+        i,
+        numComponents <= 1
+          ? dimensions.w / 2
+          : margin + ((dimensions.w - 2 * margin) * i) / (numComponents - 1)
+      );
+    }
+    // Assign per-node target
+    for (const n of nodes) {
+      (n as any)._targetX = componentTargetX.get(slugToComponent.get(n.slug) ?? 0) ?? dimensions.w / 2;
+    }
+
     // Stop previous simulation if any
     if (simulationRef.current) {
       simulationRef.current.stop();
@@ -283,16 +328,27 @@ export function WikiGraph({
           .distance(mini ? 40 : 80)
           .strength(0.4)
       )
-      .force("charge", forceManyBody().strength(mini ? -60 : -120))
-      .force("center", forceCenter(dimensions.w / 2, dimensions.h / 2).strength(0.05))
-      .force("collide", forceCollide<GraphNode>((d) => nodeRadius(d.degree ?? 0, mini) + 4))
-      .alphaDecay(0.03)
+      .force("charge", forceManyBody().strength(mini ? -60 : -250))
+      // Per-cluster X target so disconnected clusters separate
+      .force("x", forceX<GraphNode>((d: any) => d._targetX ?? dimensions.w / 2).strength(0.05))
+      .force("y", forceY<GraphNode>(dimensions.h / 2).strength(0.03))
+      .force("collide", forceCollide<GraphNode>((d) => nodeRadius(d.degree ?? 0, mini) + 6))
+      .alphaDecay(0.05)
+      .alphaMin(0.008)
+      .velocityDecay(0.5)
       .alpha(isFullReset ? 1 : 0.3);
 
     sim.on("tick", () => {
       setSimNodes([...nodes]);
       setSimLinks([...links]);
     });
+
+    sim.on("end", () => {
+      setSettled(true);
+    });
+
+    // Reset settled state on full reset
+    if (isFullReset) setSettled(false);
 
     simulationRef.current = sim;
   }, [rawNodes, rawEdges, centerSlug, dimensions.w, dimensions.h, mini]);
@@ -415,8 +471,8 @@ export function WikiGraph({
         onMouseLeave={() => { isPanningRef.current = false; }}
       >
         <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-        {/* Scope hull blobs — behind everything */}
-        {!mini && scopeHulls.map((hull) => (
+        {/* Scope hull blobs — fade in after nodes settle */}
+        {!mini && settled && scopeHulls.map((hull) => (
           <g key={`hull-${hull.key}`}>
             <path
               d={hull.path}
@@ -425,7 +481,7 @@ export function WikiGraph({
               strokeWidth={1}
               strokeDasharray="6,4"
               opacity={0.6}
-              style={{ transition: "d 200ms ease" }}
+              style={{ transition: "d 300ms ease, opacity 600ms ease" }}
             />
             <text
               x={hull.cx}
@@ -435,7 +491,7 @@ export function WikiGraph({
               fontSize={10}
               fontWeight={600}
               opacity={0.7}
-              style={{ pointerEvents: "none", userSelect: "none" }}
+              style={{ pointerEvents: "none", userSelect: "none", transition: "opacity 600ms ease" }}
             >
               {hull.scopeName}
             </text>
@@ -515,10 +571,18 @@ export function WikiGraph({
                   />
                 )}
 
+                {/* Solid background to fully occlude edges behind */}
+                <circle
+                  r={isHovered ? r * 1.3 + 1 : r + 1}
+                  fill="var(--color-background, #faf5ee)"
+                  opacity={isDimmed ? 0 : 1}
+                  style={{ transition: "r 200ms ease" }}
+                />
+
                 <circle
                   r={isHovered ? r * 1.3 : r}
                   fill={color}
-                  opacity={isDimmed ? 0.15 : 0.9}
+                  opacity={isDimmed ? 0.15 : 1}
                   stroke={isCenter ? "#3a302a" : isHovered ? color : "rgba(255,255,255,0.8)"}
                   strokeWidth={isCenter ? 2.5 : isHovered ? 2 : 1}
                   style={{ transition: "r 200ms ease, opacity 200ms ease" }}

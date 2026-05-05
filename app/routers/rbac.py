@@ -152,36 +152,59 @@ async def delete_department(
 @router.get("/employees")
 async def list_employees(
     department_id: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("employees.read"),
 ):
-    """List employees, optionally filtered by department."""
-    stmt = (
-        select(Employee)
-        .options(selectinload(Employee.department), selectinload(Employee.custom_role))
+    """List employees with pagination, optionally filtered by department or search."""
+    from sqlalchemy import func as sa_func
+
+    base = select(Employee).options(
+        selectinload(Employee.department), selectinload(Employee.custom_role)
     )
+    count_base = select(sa_func.count(Employee.id))
+
     if department_id:
-        stmt = stmt.where(Employee.department_id == uuid.UUID(department_id))
-    stmt = stmt.order_by(Employee.name)
+        base = base.where(Employee.department_id == uuid.UUID(department_id))
+        count_base = count_base.where(Employee.department_id == uuid.UUID(department_id))
+    if search:
+        like = f"%{search}%"
+        base = base.where(Employee.name.ilike(like) | Employee.email.ilike(like))
+        count_base = count_base.where(Employee.name.ilike(like) | Employee.email.ilike(like))
+
+    # Total count
+    total = (await db.execute(count_base)).scalar() or 0
+
+    # Paginated query
+    offset = (max(page, 1) - 1) * page_size
+    stmt = base.order_by(Employee.name).offset(offset).limit(page_size)
     result = await db.execute(stmt)
     employees = result.scalars().all()
 
-    return [
-        EmployeeOut(
-            id=str(e.id),
-            name=e.name,
-            email=e.email,
-            role=e.role,
-            department_id=str(e.department_id),
-            department_name=e.department.name if e.department else "",
-            is_active=e.is_active,
-            has_token=bool(e.mcp_token),
-            last_connected=e.last_connected.isoformat() if e.last_connected else None,
-            custom_role_id=str(e.custom_role_id) if e.custom_role_id else None,
-            custom_role_name=e.custom_role.name if e.custom_role else None,
-        )
-        for e in employees
-    ]
+    return {
+        "items": [
+            EmployeeOut(
+                id=str(e.id),
+                name=e.name,
+                email=e.email,
+                role=e.role,
+                department_id=str(e.department_id),
+                department_name=e.department.name if e.department else "",
+                is_active=e.is_active,
+                has_token=bool(e.mcp_token),
+                last_connected=e.last_connected.isoformat() if e.last_connected else None,
+                custom_role_id=str(e.custom_role_id) if e.custom_role_id else None,
+                custom_role_name=e.custom_role.name if e.custom_role else None,
+            )
+            for e in employees
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, -(-total // page_size)),  # ceil division
+    }
 
 
 @router.post("/employees", status_code=201)
@@ -454,3 +477,10 @@ async def revoke_my_mcp_token(
     await auth_svc.revoke_token(current_user.id)
     return {"revoked": True}
 
+
+@router.get("/my/mcp-token/status")
+async def get_my_mcp_token_status(
+    current_user: Employee = Depends(get_current_user),
+):
+    """Check if the current employee has an active MCP token (without revealing it)."""
+    return {"has_token": bool(current_user.mcp_token)}

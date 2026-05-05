@@ -12,13 +12,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -113,11 +111,13 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
   const [tab, setTab] = useState<"wiki" | "sources" | "members">("wiki");
   const [wikiPages, setWikiPages] = useState<WikiPageSummary[]>([]);
   const [wikiLoading, setWikiLoading] = useState(false);
+  const [wikiIndexMd, setWikiIndexMd] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [wikiTypeTab, setWikiTypeTab] = useState<string>("all");
   const [selectedWikiSlug, setSelectedWikiSlug] = useState<string | null>(null);
   const [selectedWikiPage, setSelectedWikiPage] = useState<WikiPageDetail | null>(null);
   const [showGraph, setShowGraph] = useState(false);
+  const [showAddDocModal, setShowAddDocModal] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -137,22 +137,28 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
     load();
     if (isAdmin) {
       Promise.all([
-        api<Employee[]>("/api/employees"),
-        api<Source[]>("/api/sources"),
-      ]).then(([emps, srcs]) => {
-        setAllEmployees(emps);
-        setAllSources(srcs);
+        api<{ items: Employee[] }>("/api/employees?page_size=200"),
+        api<{ items: Source[] }>("/api/sources?page_size=200"),
+      ]).then(([empRes, srcRes]) => {
+        setAllEmployees(empRes.items);
+        setAllSources(srcRes.items);
       }).catch(() => { });
     }
   }, [load, isAdmin]);
 
-  // Load wiki pages from server-side scoped endpoint
+  // Load wiki pages + index from server-side scoped endpoint
   useEffect(() => {
     if (tab !== "wiki") return;
     setWikiLoading(true);
-    api<WikiPageSummary[]>(`/api/projects/${project.id}/wiki?limit=100`)
-      .then((pages) => setWikiPages(Array.isArray(pages) ? pages : []))
-      .catch(() => setWikiPages([]))
+    Promise.all([
+      api<WikiPageSummary[]>(`/api/projects/${project.id}/wiki?limit=200`),
+      api<{ content_md: string }>(`/api/projects/${project.id}/wiki/index`).catch(() => ({ content_md: "" })),
+    ])
+      .then(([pages, idx]) => {
+        setWikiPages(Array.isArray(pages) ? pages : []);
+        setWikiIndexMd(idx.content_md || null);
+      })
+      .catch(() => { setWikiPages([]); setWikiIndexMd(null); })
       .finally(() => setWikiLoading(false));
   }, [tab, project.id]);
 
@@ -302,11 +308,10 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                tab === t.key
-                  ? "border-primary text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tab === t.key
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
             >
               <span className="material-symbols-outlined text-base">{t.icon}</span>
               {t.label}
@@ -398,158 +403,192 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
       )}
 
       {/* ================================================================ */}
-      {/* Documents tab — matching Knowledge Base table style              */}
+      {/* Documents tab — card-based layout with Add Document modal       */}
       {/* ================================================================ */}
       {tab === "sources" && (
-        <div className="flex flex-col gap-4">
-          {isAdmin && (
-            <div className="flex flex-col sm:flex-row gap-3">
-              {/* Upload drop zone */}
-              <label className="block cursor-pointer flex-1">
-                <input
-                  type="file"
-                  className="hidden"
-                  onChange={handleFileUpload}
-                  disabled={uploading}
-                  accept=".pdf,.docx,.doc,.txt,.md,.csv,.xlsx"
-                />
-                <div className="bg-card rounded-xl border-2 border-dashed border-border hover:border-primary/40 hover:bg-primary/5 transition-all p-5 flex items-center gap-3 h-full">
-                  <span className="material-symbols-outlined text-xl text-muted-foreground">
-                    {uploading ? "hourglass_empty" : "cloud_upload"}
-                  </span>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium text-foreground">
-                      {uploading ? "Uploading..." : "Upload file to workspace"}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      PDF, DOCX, TXT, MD, CSV, XLSX
-                    </span>
+        <div className="flex flex-col gap-5">
+          {/* Stats bar + Add button */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {sources.length > 0 && (
+                <>
+                  <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2 shadow-sahara">
+                    <span className="material-symbols-outlined text-sm text-primary">description</span>
+                    <span className="text-sm font-semibold">{sources.length}</span>
+                    <span className="text-xs text-muted-foreground">Documents</span>
                   </div>
-                </div>
-              </label>
-
-              {/* Link existing source */}
-              <div className="bg-card rounded-xl border border-border shadow-sahara p-3 flex gap-2 flex-1">
-                <Select value={selectedSourceId} onValueChange={(v) => setSelectedSourceId(v ?? "")}>
-                  <SelectTrigger className="bg-background flex-1">
-                    {selectedSourceId ? (
-                      <span className="truncate">
-                        {(() => {
-                          const s = availableSources.find((src) => src.id === selectedSourceId);
-                          return s ? (s.title || s.id) : selectedSourceId;
-                        })()}
-                      </span>
-                    ) : (
-                      <SelectValue placeholder="Link existing document..." />
-                    )}
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableSources.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.title || s.id}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  disabled={!selectedSourceId}
-                  onClick={handleAddSource}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 shrink-0"
-                >
-                  <span className="material-symbols-outlined text-base mr-1">add</span>
-                  Add
-                </Button>
-              </div>
+                  {(() => {
+                    const ready = sources.filter(s => s.status === "ready").length;
+                    const processing = sources.filter(s => s.status === "processing" || s.status === "pending").length;
+                    const errored = sources.filter(s => s.status === "error").length;
+                    return (
+                      <>
+                        {ready > 0 && (
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <span className="w-2 h-2 rounded-full bg-green-500" />
+                            {ready} ready
+                          </div>
+                        )}
+                        {processing > 0 && (
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                            {processing} processing
+                          </div>
+                        )}
+                        {errored > 0 && (
+                          <div className="flex items-center gap-1.5 text-xs text-destructive">
+                            <span className="w-2 h-2 rounded-full bg-destructive" />
+                            {errored} failed
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </>
+              )}
             </div>
-          )}
+            {isAdmin && (
+              <Button
+                onClick={() => setShowAddDocModal(true)}
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
+                size="sm"
+              >
+                <span className="material-symbols-outlined text-base mr-1.5">add</span>
+                Add Document
+              </Button>
+            )}
+          </div>
 
+          {/* Document cards */}
           {sources.length === 0 ? (
-            <div className="bg-card rounded-xl border border-border shadow-sahara">
-              <EmptyState icon="description" title="No documents yet" description="Upload files or link existing documents to build this workspace's knowledge base." />
+            <div className="bg-card rounded-xl border border-border shadow-sahara py-16 flex flex-col items-center gap-3">
+              <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 28 }}>folder_open</span>
+              </div>
+              <h3 className="text-base font-heading text-foreground">No documents yet</h3>
+              <p className="text-sm text-muted-foreground max-w-sm text-center">
+                Upload files or link existing documents to build this workspace's knowledge base.
+              </p>
+              {isAdmin && (
+                <Button
+                  onClick={() => setShowAddDocModal(true)}
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                >
+                  <span className="material-symbols-outlined text-base mr-1.5">add</span>
+                  Add your first document
+                </Button>
+              )}
             </div>
           ) : (
-            <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="text-xs uppercase tracking-wider">Name</TableHead>
-                    <TableHead className="text-xs uppercase tracking-wider">Type</TableHead>
-                    <TableHead className="text-xs uppercase tracking-wider">Status</TableHead>
-                    <TableHead className="text-xs uppercase tracking-wider">Added</TableHead>
-                    {isAdmin && (
-                      <TableHead className="text-xs uppercase tracking-wider text-right">Actions</TableHead>
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sources.map((s) => (
-                    <TableRow key={s.source_id} className="hover:bg-secondary/30">
-                      <TableCell>
-                        <div className="flex items-center gap-2.5">
-                          <span className="material-symbols-outlined text-muted-foreground text-base">
-                            {fileIcons[getFileExt(s)] || (s.source_type === "url" ? "link" : "description")}
+            <div className="flex flex-col gap-2">
+              {sources.map((s) => {
+                const ext = getFileExt(s);
+                const icon = fileIcons[ext] || (s.source_type === "url" ? "link" : "description");
+                const isProcessing = s.status === "processing" || s.status === "pending";
+                return (
+                  <div
+                    key={s.source_id}
+                    className="group bg-card border border-border rounded-xl px-4 py-3.5 hover:border-primary/30 hover:shadow-sahara transition-all flex items-center gap-3"
+                  >
+                    {/* File icon */}
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${s.status === "ready" ? "bg-green-500/10" :
+                      s.status === "error" ? "bg-destructive/10" :
+                        "bg-primary/10"
+                      }`}>
+                      <span className={`material-symbols-outlined ${s.status === "ready" ? "text-green-600" :
+                        s.status === "error" ? "text-destructive" :
+                          "text-primary"
+                        }`} style={{ fontSize: 18 }}>
+                        {icon}
+                      </span>
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground truncate">
+                          {s.title || s.source_id}
+                        </span>
+                        {ext && (
+                          <span className="text-[10px] font-medium text-muted-foreground uppercase bg-accent/50 px-1.5 py-0.5 rounded shrink-0">
+                            {ext}
                           </span>
-                          <span className="text-sm font-medium">{s.title || s.source_id}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {s.knowledge_type_name ? (
-                          <Badge variant="outline" className="text-xs font-medium">
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {s.knowledge_type_name && (
+                          <Badge variant="outline" className="text-[10px] h-4 px-1.5 font-medium">
                             {s.knowledge_type_name}
                           </Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
                         )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`w-2 h-2 rounded-full ${s.status === "ready" ? "bg-green-500"
-                              : s.status === "processing" ? "bg-yellow-500"
-                                : s.status === "error" ? "bg-destructive"
-                                  : "bg-muted-foreground"
-                              }`} />
-                            <span className="text-xs capitalize text-muted-foreground">{s.status}</span>
-                            {s.status === "processing" && s.progress !== undefined && (
-                              <span className="text-xs text-muted-foreground">({s.progress}%)</span>
-                            )}
-                          </div>
-                          {(s.status === "processing" || s.status === "pending") && s.progress_message && (
-                            <span className="text-[10px] text-muted-foreground truncate max-w-[180px]" title={s.progress_message}>
-                              {s.progress_message}
-                            </span>
-                          )}
+                        {isProcessing && s.progress_message && (
+                          <span className="text-[10px] text-muted-foreground truncate max-w-[200px]" title={s.progress_message}>
+                            {s.progress_message}
+                          </span>
+                        )}
+                      </div>
+                      {/* Progress bar for processing */}
+                      {isProcessing && s.progress !== undefined && (
+                        <div className="mt-1.5 h-1 bg-border rounded-full overflow-hidden w-full max-w-[200px]">
+                          <div
+                            className="h-full bg-primary/70 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.min(s.progress, 100)}%` }}
+                          />
                         </div>
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {s.added_at ? new Date(s.added_at).toLocaleDateString() : "—"}
-                      </TableCell>
-                      {isAdmin && (
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-accent hover:text-accent-foreground">
-                              <span className="material-symbols-outlined text-base">more_vert</span>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => handleRemoveSource(s.source_id)}
-                                className="text-destructive focus:text-destructive"
-                              >
-                                <span className="material-symbols-outlined text-base mr-2">close</span>
-                                Remove
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
                       )}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                    </div>
+
+                    {/* Status + date + actions */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${s.status === "ready" ? "bg-green-500" :
+                          s.status === "processing" ? "bg-yellow-500 animate-pulse" :
+                            s.status === "error" ? "bg-destructive" :
+                              "bg-muted-foreground"
+                          }`} />
+                        <span className="text-xs capitalize text-muted-foreground">{s.status}</span>
+                        {s.status === "processing" && s.progress !== undefined && (
+                          <span className="text-xs text-muted-foreground tabular-nums">({s.progress}%)</span>
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {s.added_at ? new Date(s.added_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}
+                      </span>
+                      {isAdmin && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-accent text-muted-foreground transition-opacity">
+                            <span className="material-symbols-outlined text-base">more_vert</span>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => handleRemoveSource(s.source_id)}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <span className="material-symbols-outlined text-base mr-2">delete</span>
+                              Remove
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       )}
+
+      {/* Add Document Modal */}
+      <AddDocumentModal
+        open={showAddDocModal}
+        onOpenChange={setShowAddDocModal}
+        projectId={project.id}
+        availableSources={availableSources}
+        onDone={() => { load(); setShowAddDocModal(false); }}
+      />
 
       {/* ================================================================ */}
       {/* Wiki tab — inline viewer, no route changes                        */}
@@ -561,149 +600,154 @@ export function ProjectDetail({ project, isAdmin, onBack }: Props) {
             onBack={() => setShowGraph(false)}
           />
         ) : (
-        <div className="flex gap-0 -mx-6 md:-mx-8 -mb-6 md:-mb-8 flex-1 min-h-0 border-t border-border overflow-hidden">
-          {/* Page Tree sidebar — scoped to workspace */}
-          <WikiPageTree
-            pagesUrl={`/api/projects/${project.id}/wiki?limit=200`}
-            activeSlug={selectedWikiSlug ?? undefined}
-            onPageSelect={(slug) => { setSelectedWikiSlug(slug); setSelectedWikiPage(null); }}
-          />
+          <div className="flex gap-0 -mx-6 md:-mx-8 -mb-6 md:-mb-8 flex-1 min-h-0 border-t border-border overflow-hidden">
+            {/* Page Tree sidebar — scoped to workspace */}
+            <WikiPageTree
+              pagesUrl={`/api/projects/${project.id}/wiki?limit=200`}
+              activeSlug={selectedWikiSlug ?? undefined}
+              onPageSelect={(slug) => { setSelectedWikiSlug(slug); setSelectedWikiPage(null); }}
+            />
 
-          {/* Content area */}
-          <div className="flex-1 overflow-y-auto px-8 py-6 min-w-0">
-            {selectedWikiSlug ? (
-              /* ---- Inline wiki page detail view ---- */
-              <WikiDetailInline
-                slug={selectedWikiSlug}
-                projectId={project.id}
-                onBack={() => { setSelectedWikiSlug(null); setSelectedWikiPage(null); }}
-                onPageLoaded={setSelectedWikiPage}
-                onNavigate={(slug) => { setSelectedWikiSlug(slug); setSelectedWikiPage(null); }}
-              />
-            ) : (
-              /* ---- Wiki pages list view ---- */
-              <>
-                {wikiLoading ? (
-                  <div className="flex items-center justify-center h-32">
-                    <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
-                      progress_activity
-                    </span>
-                  </div>
-                ) : wikiPages.length === 0 ? (
-                  <EmptyState
-                    icon="auto_stories"
-                    title="No wiki pages yet"
-                    description="Upload documents in this workspace to automatically compile knowledge into wiki pages."
-                  />
-                ) : (
-                  <>
-                    {/* Stats bar + Graph View button on same row */}
-                    <div className="flex flex-wrap items-center gap-3 mb-8">
-                      <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5 shadow-sahara">
-                        <span className="material-symbols-outlined text-base text-primary">article</span>
-                        <span className="text-sm font-semibold text-foreground">{wikiPages.length}</span>
-                        <span className="text-xs text-muted-foreground">Pages</span>
-                      </div>
-                      {Object.entries(wikiTypeCounts).sort((a, b) => b[1] - a[1]).map(([type, count]) => (
-                        <div
-                          key={type}
-                          className="flex items-center gap-1.5 bg-card border border-border rounded-xl px-3 py-2.5 shadow-sahara"
-                        >
-                          <WikiTypeBadge type={type} />
-                          <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
+            {/* Content area */}
+            <div className="flex-1 overflow-y-auto px-8 py-6 min-w-0">
+              {selectedWikiSlug ? (
+                /* ---- Inline wiki page detail view ---- */
+                <WikiDetailInline
+                  slug={selectedWikiSlug}
+                  projectId={project.id}
+                  onBack={() => { setSelectedWikiSlug(null); setSelectedWikiPage(null); }}
+                  onPageLoaded={setSelectedWikiPage}
+                  onNavigate={(slug) => { setSelectedWikiSlug(slug); setSelectedWikiPage(null); }}
+                />
+              ) : (
+                /* ---- Wiki pages list view ---- */
+                <>
+                  {wikiLoading ? (
+                    <div className="flex items-center justify-center h-32">
+                      <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
+                        progress_activity
+                      </span>
+                    </div>
+                  ) : wikiPages.length === 0 ? (
+                    <EmptyState
+                      icon="auto_stories"
+                      title="No wiki pages yet"
+                      description="Upload documents in this workspace to automatically compile knowledge into wiki pages."
+                    />
+                  ) : (
+                    <>
+                      {/* Stats bar + Graph View button on same row */}
+                      <div className="flex flex-wrap items-center gap-3 mb-8">
+                        <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5 shadow-sahara">
+                          <span className="material-symbols-outlined text-base text-primary">article</span>
+                          <span className="text-sm font-semibold text-foreground">{wikiPages.length}</span>
+                          <span className="text-xs text-muted-foreground">Pages</span>
                         </div>
-                      ))}
-                      <div className="flex items-center gap-2 ml-auto">
-                        {wikiPages[0]?.updated_at && (
-                          <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5 shadow-sahara">
-                            <span className="material-symbols-outlined text-base text-muted-foreground">schedule</span>
-                            <span className="text-xs text-muted-foreground">
-                              Updated {new Date(wikiPages[0].updated_at).toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                              })}
-                            </span>
-                          </div>
-                        )}
-                        <button
-                          onClick={() => setShowGraph(true)}
-                          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sahara"
-                        >
-                          <span className="material-symbols-outlined text-base">hub</span>
-                          Graph View
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Type filter tabs */}
-                    <div className="flex items-center gap-1 mb-5 border-b border-border">
-                      {WIKI_TYPE_TABS.map((wt) => {
-                        const count = wt === "all"
-                          ? wikiPages.length
-                          : wikiTypeCounts[wt] ?? 0;
-                        if (wt !== "all" && count === 0) return null;
-                        return (
-                          <button
-                            key={wt}
-                            onClick={() => setWikiTypeTab(wt)}
-                            className={`px-3 py-2 text-xs font-medium capitalize border-b-2 transition-colors ${wikiTypeTab === wt
-                              ? "border-primary text-primary"
-                              : "border-transparent text-muted-foreground hover:text-foreground"
-                              }`}
+                        {Object.entries(wikiTypeCounts).sort((a, b) => b[1] - a[1]).map(([type, count]) => (
+                          <div
+                            key={type}
+                            className="flex items-center gap-1.5 bg-card border border-border rounded-xl px-3 py-2.5 shadow-sahara"
                           >
-                            {wt === "all" ? "All" : wikiTypeGroupLabel(wt)}
-                            <span className="ml-1.5 tabular-nums text-muted-foreground">
-                              {count}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Wiki page cards — click opens inline */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                      {displayWikiPages.map((page) => (
-                        <button
-                          key={page.slug}
-                          onClick={() => setSelectedWikiSlug(page.slug)}
-                          className="group block bg-card border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-sahara transition-all text-left"
-                        >
-                          <div className="flex items-start justify-between gap-2 mb-2">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <WikiTypeBadge type={page.page_type} />
-                              <ScopeBadge scopeType="workspace" />
-                            </div>
-                            <span className="text-xs text-muted-foreground shrink-0">
-                              v{page.version}
-                            </span>
+                            <WikiTypeBadge type={type} />
+                            <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
                           </div>
-                          <h3 className="font-heading text-base font-normal text-foreground group-hover:text-primary transition-colors mb-1">
-                            {page.title}
-                          </h3>
-                          {page.summary && (
-                            <p className="text-xs text-muted-foreground line-clamp-2">
-                              {page.summary}
-                            </p>
+                        ))}
+                        <div className="flex items-center gap-2 ml-auto">
+                          {wikiPages[0]?.updated_at && (
+                            <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5 shadow-sahara">
+                              <span className="material-symbols-outlined text-base text-muted-foreground">schedule</span>
+                              <span className="text-xs text-muted-foreground">
+                                Updated {new Date(wikiPages[0].updated_at).toLocaleDateString("en-US", {
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                              </span>
+                            </div>
                           )}
-                          <p className="text-xs text-muted-foreground mt-3">
-                            {new Date(page.updated_at).toLocaleDateString()}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </>
+                          <button
+                            onClick={() => setShowGraph(true)}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sahara"
+                          >
+                            <span className="material-symbols-outlined text-base">hub</span>
+                            Graph View
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Wiki Index content — mirrors /wiki page */}
+                      {wikiIndexMd && (
+                        <WikiContent markdown={wikiIndexMd} />
+                      )}
+
+                      {/* Type filter tabs */}
+                      <div className="flex items-center gap-1 mb-5 border-b border-border">
+                        {WIKI_TYPE_TABS.map((wt) => {
+                          const count = wt === "all"
+                            ? wikiPages.length
+                            : wikiTypeCounts[wt] ?? 0;
+                          if (wt !== "all" && count === 0) return null;
+                          return (
+                            <button
+                              key={wt}
+                              onClick={() => setWikiTypeTab(wt)}
+                              className={`px-3 py-2 text-xs font-medium capitalize border-b-2 transition-colors ${wikiTypeTab === wt
+                                ? "border-primary text-primary"
+                                : "border-transparent text-muted-foreground hover:text-foreground"
+                                }`}
+                            >
+                              {wt === "all" ? "All" : wikiTypeGroupLabel(wt)}
+                              <span className="ml-1.5 tabular-nums text-muted-foreground">
+                                {count}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Wiki page cards — click opens inline */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        {displayWikiPages.map((page) => (
+                          <button
+                            key={page.slug}
+                            onClick={() => setSelectedWikiSlug(page.slug)}
+                            className="group block bg-card border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-sahara transition-all text-left"
+                          >
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <WikiTypeBadge type={page.page_type} />
+                                <ScopeBadge scopeType="workspace" />
+                              </div>
+                              <span className="text-xs text-muted-foreground shrink-0">
+                                v{page.version}
+                              </span>
+                            </div>
+                            <h3 className="font-heading text-base font-normal text-foreground group-hover:text-primary transition-colors mb-1">
+                              {page.title}
+                            </h3>
+                            {page.summary && (
+                              <p className="text-xs text-muted-foreground line-clamp-2">
+                                {page.summary}
+                              </p>
+                            )}
+                            <p className="text-xs text-muted-foreground mt-3">
+                              {new Date(page.updated_at).toLocaleDateString()}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Right sidebar — shown when viewing a page, mirrors standalone wiki */}
+            {selectedWikiSlug && selectedWikiPage && (
+              <div className="hidden lg:flex shrink-0 overflow-hidden">
+                <WikiSidebarRight slug={selectedWikiSlug} page={selectedWikiPage} />
+              </div>
             )}
           </div>
-
-          {/* Right sidebar — shown when viewing a page, mirrors standalone wiki */}
-          {selectedWikiSlug && selectedWikiPage && (
-            <div className="hidden lg:flex shrink-0 overflow-hidden">
-              <WikiSidebarRight slug={selectedWikiSlug} page={selectedWikiPage} />
-            </div>
-          )}
-        </div>
         )
       )}
     </div>
@@ -1019,5 +1063,282 @@ function WikiGraphInline({ projectId, onBack }: { projectId: string; onBack: () 
         </SheetContent>
       </Sheet>
     </div>
+  );
+}
+
+/* ================================================================== */
+/* AddDocumentModal — Upload or Link existing documents               */
+/* ================================================================== */
+const ALLOWED_EXTS = [".pdf", ".docx", ".doc", ".xlsx", ".csv", ".txt", ".md", ".pptx"];
+const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
+
+function AddDocumentModal({
+  open,
+  onOpenChange,
+  projectId,
+  availableSources,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  projectId: string;
+  availableSources: Source[];
+  onDone: () => void;
+}) {
+  const [mode, setMode] = useState<"upload" | "link">("upload");
+  const [dragOver, setDragOver] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [selectedSourceId, setSelectedSourceId] = useState("");
+  const [linking, setLinking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const reset = () => {
+    setSelectedFile(null);
+    setFileError(null);
+    setError(null);
+    setSelectedSourceId("");
+    setUploading(false);
+    setLinking(false);
+  };
+
+  const validateFile = (file: File): string | null => {
+    const ext = "." + file.name.split(".").pop()?.toLowerCase();
+    if (!ALLOWED_EXTS.includes(ext)) return `Unsupported file type: ${ext}`;
+    if (file.size > MAX_SIZE) return `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max: 50 MB`;
+    return null;
+  };
+
+  const handleFile = (file: File) => {
+    setFileError(null);
+    const err = validateFile(file);
+    if (err) { setFileError(err); return; }
+    setSelectedFile(file);
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      formData.append("title", selectedFile.name);
+      await apiUpload(`/api/projects/${projectId}/sources/upload`, formData);
+      reset();
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleLink = async () => {
+    if (!selectedSourceId) return;
+    setLinking(true);
+    setError(null);
+    try {
+      await api(`/api/projects/${projectId}/sources`, {
+        method: "POST",
+        body: { source_id: selectedSourceId },
+      });
+      reset();
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to link document");
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
+      <DialogContent className="sm:max-w-[520px] p-0 overflow-hidden">
+        <DialogHeader className="px-6 pt-6 pb-0">
+          <DialogTitle className="text-lg font-heading">Add Document</DialogTitle>
+        </DialogHeader>
+
+        {/* Mode tabs */}
+        <div className="flex border-b border-border mx-6">
+          {(["upload", "link"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => { setMode(m); setError(null); }}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${mode === m
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+            >
+              <span className="material-symbols-outlined text-sm">
+                {m === "upload" ? "cloud_upload" : "add"}
+              </span>
+              {m === "upload" ? "Upload File" : "Add Existing"}
+            </button>
+          ))}
+        </div>
+
+        <div className="px-6 pb-6 pt-4">
+          {/* Error */}
+          {error && (
+            <div className="mb-4 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg flex items-center gap-2">
+              <span className="material-symbols-outlined text-sm">error</span>
+              {error}
+            </div>
+          )}
+
+          {mode === "upload" ? (
+            /* ---- Upload tab ---- */
+            <div className="flex flex-col gap-4">
+              {/* Drop zone */}
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleFile(file);
+                }}
+                className={`cursor-pointer rounded-xl border-2 border-dashed p-8 flex flex-col items-center gap-3 transition-all ${dragOver
+                  ? "border-primary bg-primary/5"
+                  : selectedFile
+                    ? "border-green-400/50 bg-green-500/5"
+                    : "border-border hover:border-primary/40 hover:bg-primary/5"
+                  }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept={ALLOWED_EXTS.join(",")}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleFile(file);
+                    e.target.value = "";
+                  }}
+                />
+                {selectedFile ? (
+                  <>
+                    <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center">
+                      <span className="material-symbols-outlined text-green-600" style={{ fontSize: 22 }}>check_circle</span>
+                    </div>
+                    <div className="text-center min-w-0 max-w-full">
+                      <p className="text-sm font-medium text-foreground truncate max-w-[360px]">{selectedFile.name}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {(selectedFile.size / 1024).toFixed(0)} KB · Click to change
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${dragOver ? "bg-primary/20" : "bg-primary/10"
+                      }`}>
+                      <span className="material-symbols-outlined text-primary" style={{ fontSize: 22 }}>cloud_upload</span>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-medium text-foreground">
+                        {dragOver ? "Drop file here" : "Drag & drop or click to browse"}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        PDF, DOCX, XLSX, CSV, TXT, MD, PPTX · Max 50 MB
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {fileError && (
+                <p className="text-sm text-destructive flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm">warning</span>
+                  {fileError}
+                </p>
+              )}
+
+              <Button
+                disabled={!selectedFile || uploading}
+                onClick={handleUpload}
+                className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                {uploading ? (
+                  <>
+                    <span className="material-symbols-outlined text-base mr-2 animate-spin">progress_activity</span>
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-base mr-2">upload</span>
+                    Upload
+                  </>
+                )}
+              </Button>
+            </div>
+          ) : (
+            /* ---- Link tab ---- */
+            <div className="flex flex-col gap-4">
+              {availableSources.length === 0 ? (
+                <div className="py-8 flex flex-col items-center gap-2">
+                  <span className="material-symbols-outlined text-3xl text-muted-foreground/40">description</span>
+                  <p className="text-sm text-muted-foreground">No available documents to link</p>
+                  <p className="text-xs text-muted-foreground">All documents are already in this workspace.</p>
+                </div>
+              ) : (
+                <>
+                  <Select value={selectedSourceId} onValueChange={(v) => setSelectedSourceId(v ?? "")}>
+                    <SelectTrigger className="bg-background w-full">
+                      {selectedSourceId ? (
+                        <span className="truncate">
+                          {availableSources.find(s => s.id === selectedSourceId)?.title || selectedSourceId}
+                        </span>
+                      ) : (
+                        <SelectValue placeholder="Select an existing document to add..." />
+                      )}
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableSources.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          <div className="flex items-center gap-2">
+                            <span className="material-symbols-outlined text-sm text-muted-foreground">
+                              {s.source_type === "url" ? "link" : "description"}
+                            </span>
+                            {s.title || s.id}
+                            {s.knowledge_type_name && (
+                              <span className="text-[10px] text-muted-foreground bg-accent/50 px-1.5 py-0.5 rounded">
+                                {s.knowledge_type_name}
+                              </span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Button
+                    disabled={!selectedSourceId || linking}
+                    onClick={handleLink}
+                    className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    {linking ? (
+                      <>
+                        <span className="material-symbols-outlined text-base mr-2 animate-spin">progress_activity</span>
+                        Linking...
+                      </>
+                    ) : (
+                      <>
+                        <span className="material-symbols-outlined text-base mr-2">add_link</span>
+                        Link to Workspace
+                      </>
+                    )}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

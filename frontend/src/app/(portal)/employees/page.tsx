@@ -31,6 +31,14 @@ export type Employee = {
   custom_role_name?: string;
 };
 
+type PaginatedResponse = {
+  items: Employee[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -38,17 +46,28 @@ export default function EmployeesPage() {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editEmployee, setEditEmployee] = useState<Employee | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState("");
+  const pageSize = 20;
 
-  const loadEmployees = useCallback(async () => {
+  const loadEmployees = useCallback(async (p = 1, s = "") => {
     setLoading(true);
     try {
-      const data = await api<Employee[]>("/api/employees");
-      setEmployees(data);
+      const params = new URLSearchParams({ page: String(p), page_size: String(pageSize) });
+      if (s) params.set("search", s);
+      const data = await api<PaginatedResponse>(`/api/employees?${params}`);
+      setEmployees(data.items);
+      setTotal(data.total);
+      setTotalPages(data.total_pages);
+      setPage(data.page);
     } catch {
       setEmployees([]);
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -65,6 +84,12 @@ export default function EmployeesPage() {
   const handleEdit = (emp: Employee) => {
     setEditEmployee(emp);
     setDialogOpen(true);
+  };
+
+  const handleSearch = (q: string) => {
+    setSearch(q);
+    setPage(1);
+    loadEmployees(1, q);
   };
 
   return (
@@ -89,7 +114,13 @@ export default function EmployeesPage() {
         employees={employees}
         loading={loading}
         onEdit={handleEdit}
-        onRefresh={loadEmployees}
+        onRefresh={() => loadEmployees(page, search)}
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        onPageChange={(p) => { setPage(p); loadEmployees(p, search); }}
+        search={search}
+        onSearch={handleSearch}
       />
 
       <EmployeeDialog
@@ -98,7 +129,7 @@ export default function EmployeesPage() {
         employee={editEmployee}
         departments={departments}
         roles={roles}
-        onSaved={loadEmployees}
+        onSaved={() => loadEmployees(page, search)}
       />
     </>
   );

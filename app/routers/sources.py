@@ -113,35 +113,58 @@ def _to_response(source: Source, wiki_page_count: int = 0) -> SourceResponse:
     )
 
 
-@router.get("/sources", response_model=list[SourceResponse])
+@router.get("/sources")
 async def list_sources(
     knowledge_type_id: Optional[uuid.UUID] = Query(None),
     department_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("documents.read"),
 ):
-    stmt = (
+    base = (
         select(Source)
         .options(
             selectinload(Source.knowledge_type),
             selectinload(Source.department),
             selectinload(Source.contributor),
         )
-        .order_by(Source.created_at.desc())
     )
-    if knowledge_type_id:
-        stmt = stmt.where(Source.knowledge_type_id == knowledge_type_id)
-    if department_id:
-        stmt = stmt.where(Source.department_id == department_id)
-    if status:
-        stmt = stmt.where(Source.status == status)
+    count_base = select(func.count(Source.id))
 
+    if knowledge_type_id:
+        base = base.where(Source.knowledge_type_id == knowledge_type_id)
+        count_base = count_base.where(Source.knowledge_type_id == knowledge_type_id)
+    if department_id:
+        base = base.where(Source.department_id == department_id)
+        count_base = count_base.where(Source.department_id == department_id)
+    if status:
+        base = base.where(Source.status == status)
+        count_base = count_base.where(Source.status == status)
+    if search:
+        like = f"%{search}%"
+        base = base.where(Source.title.ilike(like) | Source.file_name.ilike(like))
+        count_base = count_base.where(Source.title.ilike(like) | Source.file_name.ilike(like))
+
+    total = (await db.execute(count_base)).scalar() or 0
+
+    offset = (max(page, 1) - 1) * page_size
+    stmt = base.order_by(Source.created_at.desc()).offset(offset).limit(page_size)
     sources = (await db.execute(stmt)).scalars().all()
-    out: list[SourceResponse] = []
+
+    items: list[SourceResponse] = []
     for s in sources:
-        out.append(_to_response(s, await _wiki_page_count(db, s.id)))
-    return out
+        items.append(_to_response(s, await _wiki_page_count(db, s.id)))
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, -(-total // page_size)),
+    }
 
 
 @router.get("/sources/{source_id}")
@@ -332,6 +355,9 @@ async def update_source(
     if body.scope_type is not None:
         source.scope_type = body.scope_type
         source.scope_id = body.scope_id  # None for global
+        # Auto-sync department_id when scoped to department
+        if body.scope_type == "department" and body.scope_id:
+            source.department_id = body.scope_id
     await db.flush()
 
     source = (await db.execute(

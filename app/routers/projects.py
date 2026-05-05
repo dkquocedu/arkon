@@ -131,11 +131,27 @@ async def list_projects(
     )
     member_counts = {str(r[0]): r[1] for r in member_counts_result.all()}
 
-    source_counts_result = await db.execute(
+    # Source counts: linked (project_sources) + owned (scope_type=project)
+    linked_counts_result = await db.execute(
         select(ProjectSource.project_id, func.count(ProjectSource.source_id))
         .group_by(ProjectSource.project_id)
     )
-    source_counts = {str(r[0]): r[1] for r in source_counts_result.all()}
+    linked_counts = {str(r[0]): r[1] for r in linked_counts_result.all()}
+
+    owned_counts_result = await db.execute(
+        select(Source.scope_id, func.count(Source.id))
+        .where(Source.scope_type == "project", Source.scope_id.isnot(None))
+        .group_by(Source.scope_id)
+    )
+    owned_counts = {str(r[0]): r[1] for r in owned_counts_result.all()}
+
+    # Merge: use max of linked+owned (some may overlap but it's a good estimate)
+    all_project_ids = set(linked_counts.keys()) | set(owned_counts.keys())
+    source_counts: dict[str, int] = {}
+    for pid_str in all_project_ids:
+        linked = linked_counts.get(pid_str, 0)
+        owned = owned_counts.get(pid_str, 0)
+        source_counts[pid_str] = max(linked, owned)
 
     return [
         _project_out(p, member_counts.get(str(p.id), 0), source_counts.get(str(p.id), 0))
@@ -441,14 +457,22 @@ async def remove_project_source(
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("workspaces.edit"),
 ):
-    ps = await db.get(
-        ProjectSource,
-        (uuid.UUID(project_id), uuid.UUID(source_id)),
-    )
-    if not ps:
-        raise HTTPException(404, "Source not in project")
-    await db.delete(ps)
-    return {"removed": True}
+    pid = uuid.UUID(project_id)
+    sid = uuid.UUID(source_id)
+
+    # 1. Check linked source (project_sources join table)
+    ps = await db.get(ProjectSource, (pid, sid))
+    if ps:
+        await db.delete(ps)
+        return {"removed": True}
+
+    # 2. Check owned source (scope_type=project, scope_id=project_id)
+    source = await db.get(Source, sid)
+    if source and source.scope_type == "project" and source.scope_id == pid:
+        await db.delete(source)
+        return {"removed": True}
+
+    raise HTTPException(404, "Source not in project")
 
 
 # ---------------------------------------------------------------------------
@@ -613,6 +637,23 @@ async def list_workspace_wiki(
         }
         for p in pages
     ]
+
+
+@router.get("/projects/{project_id}/wiki/index")
+async def get_workspace_wiki_index(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """Get wiki index page scoped to this workspace."""
+    await _get_project_or_404(db, project_id)
+    pid = uuid.UUID(project_id)
+    from app.services import wiki_service
+    page = await wiki_service.get_page_by_slug(
+        db, wiki_service.INDEX_SLUG,
+        scope_type="project", scope_id=pid,
+    )
+    return {"content_md": page.content_md if page else ""}
 
 
 @router.get("/projects/{project_id}/wiki/graph")

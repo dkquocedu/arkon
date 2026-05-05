@@ -37,6 +37,7 @@ type Employee = {
   department_name: string;
   is_active: boolean;
   has_token: boolean;
+  last_connected?: string;
   custom_role_id?: string;
   custom_role_name?: string;
 };
@@ -46,12 +47,30 @@ type Props = {
   loading: boolean;
   onEdit: (emp: Employee) => void;
   onRefresh: () => void;
+  page: number;
+  totalPages: number;
+  total: number;
+  onPageChange: (page: number) => void;
+  search: string;
+  onSearch: (q: string) => void;
 };
 
-export function EmployeeTable({ employees, loading, onEdit, onRefresh }: Props) {
+export function EmployeeTable({
+  employees,
+  loading,
+  onEdit,
+  onRefresh,
+  page,
+  totalPages,
+  total,
+  onPageChange,
+  search,
+  onSearch,
+}: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [tokenDialog, setTokenDialog] = useState<{ token: string; instructions: string } | null>(null);
   const [scopeEmployee, setScopeEmployee] = useState<Employee | null>(null);
+  const [searchInput, setSearchInput] = useState(search);
 
   const handleToggle = async (id: string) => {
     setActionError(null);
@@ -99,149 +118,233 @@ export function EmployeeTable({ employees, loading, onEdit, onRefresh }: Props) 
     }
   };
 
-  if (loading) {
-    return (
-      <div className="bg-card rounded-xl border border-border shadow-sahara flex items-center justify-center py-16">
-        <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
-          progress_activity
-        </span>
-      </div>
-    );
-  }
-
-  if (employees.length === 0) {
-    return (
-      <div className="bg-card rounded-xl border border-border shadow-sahara">
-        <EmptyState
-          icon="group"
-          title="No employees"
-          description="Add employees to give them access to the knowledge base"
-        />
-      </div>
-    );
-  }
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSearch(searchInput);
+  };
 
   return (
     <>
       {actionError && (
-        <div className="text-sm text-destructive bg-destructive/10 px-4 py-2 rounded-lg flex items-center gap-2">
+        <div className="text-sm text-destructive bg-destructive/10 px-4 py-2 rounded-lg flex items-center gap-2 mb-4">
           <span className="material-symbols-outlined text-base">error</span>
           {actionError}
         </div>
       )}
 
+      {/* Search bar + stats */}
+      <div className="flex items-center justify-between mb-4">
+        <form onSubmit={handleSearchSubmit} className="flex items-center gap-2">
+          <div className="relative">
+            <span className="material-symbols-outlined text-sm text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2">
+              search
+            </span>
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search by name or email..."
+              className="h-9 pl-9 pr-3 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 w-[280px] placeholder:text-muted-foreground/60"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => { setSearchInput(""); onSearch(""); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+              </button>
+            )}
+          </div>
+        </form>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {total} employee{total !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      {/* Table */}
       <div className="bg-card rounded-xl border border-border shadow-sahara overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="text-xs uppercase tracking-wider">Employee</TableHead>
-              <TableHead className="text-xs uppercase tracking-wider">Role</TableHead>
-              <TableHead className="text-xs uppercase tracking-wider">Department</TableHead>
-              <TableHead className="text-xs uppercase tracking-wider">Status</TableHead>
-              <TableHead className="text-xs uppercase tracking-wider">MCP Token</TableHead>
-              <TableHead className="text-xs uppercase tracking-wider text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {employees.map((emp) => (
-              <TableRow key={emp.id} className="hover:bg-secondary/30">
-                <TableCell>
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
-                      {emp.name.charAt(0).toUpperCase()}
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
+              progress_activity
+            </span>
+          </div>
+        ) : employees.length === 0 ? (
+          <EmptyState
+            icon="group"
+            title={search ? "No results found" : "No employees"}
+            description={search ? `No employees matching "${search}"` : "Add employees to give them access to the knowledge base."}
+          />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Employee</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">System Role</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Position</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Department</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Status</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">MCP Token</TableHead>
+                <TableHead className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground text-right w-[60px]"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {employees.map((emp) => (
+                <TableRow key={emp.id} className="group hover:bg-secondary/30 transition-colors">
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ${emp.role === "admin"
+                        ? "bg-primary/15 text-primary"
+                        : "bg-accent text-accent-foreground"
+                        }`}>
+                        {emp.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">{emp.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{emp.email}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium">{emp.name}</p>
-                      <p className="text-xs text-muted-foreground">{emp.email}</p>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col gap-1">
+                  </TableCell>
+                  <TableCell>
                     <Badge
                       variant={emp.role === "admin" ? "default" : "secondary"}
-                      className="text-xs capitalize w-fit"
+                      className="text-[10px] capitalize h-5 px-2"
                     >
                       {emp.role}
                     </Badge>
-                    {emp.custom_role_name && (
-                      <Badge variant="outline" className="text-xs w-fit font-normal">
-                        {emp.custom_role_name}
-                      </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {emp.custom_role_name ? (
+                      <span className="text-sm text-foreground">{emp.custom_role_name}</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground/50">—</span>
                     )}
-                  </div>
-                </TableCell>
-                <TableCell className="text-sm">{emp.department_name}</TableCell>
-                <TableCell>
-                  <Badge
-                    variant={emp.is_active ? "outline" : "secondary"}
-                    className={`text-xs ${
-                      emp.is_active
-                        ? "border-green-500 text-green-700"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {emp.is_active ? "Active" : "Inactive"}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  {emp.has_token ? (
-                    <span className="text-xs text-green-600 flex items-center gap-1">
-                      <span className="material-symbols-outlined text-sm filled">vpn_key</span>
-                      Connected
-                    </span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">No token</span>
-                  )}
-                </TableCell>
-                <TableCell className="text-right">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-accent hover:text-accent-foreground">
-                      <span className="material-symbols-outlined text-base">more_vert</span>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => onEdit(emp)}>
-                        <span className="material-symbols-outlined text-base mr-2">edit</span>
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setScopeEmployee(emp)}>
-                        <span className="material-symbols-outlined text-base mr-2">lock</span>
-                        Personal Access
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleToggle(emp.id)}>
-                        <span className="material-symbols-outlined text-base mr-2">
-                          {emp.is_active ? "person_off" : "person"}
-                        </span>
-                        {emp.is_active ? "Deactivate" : "Activate"}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      {emp.has_token ? (
-                        <DropdownMenuItem onClick={() => handleRevokeToken(emp.id)}>
-                          <span className="material-symbols-outlined text-base mr-2">vpn_key_off</span>
-                          Revoke Token
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm text-foreground">{emp.department_name}</span>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${emp.is_active ? "bg-green-500" : "bg-muted-foreground/40"
+                        }`} />
+                      <span className={`text-xs ${emp.is_active ? "text-green-700" : "text-muted-foreground"
+                        }`}>
+                        {emp.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {emp.has_token ? (
+                      <span className="text-xs text-green-600 flex items-center gap-1">
+                        <span className="material-symbols-outlined text-sm filled">vpn_key</span>
+                        Connected
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground/50">—</span>
+                    )}
+                  </TableCell>
+
+                  <TableCell className="text-right">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-accent text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="material-symbols-outlined text-base">more_vert</span>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => onEdit(emp)}>
+                          <span className="material-symbols-outlined text-base mr-2" style={{ fontSize: 16 }}>edit</span>
+                          Edit
                         </DropdownMenuItem>
-                      ) : (
-                        <DropdownMenuItem onClick={() => handleGenerateToken(emp.id)}>
-                          <span className="material-symbols-outlined text-base mr-2">vpn_key</span>
-                          Generate Token
+                        <DropdownMenuItem onClick={() => handleToggle(emp.id)}>
+                          <span className="material-symbols-outlined text-base mr-2" style={{ fontSize: 16 }}>
+                            {emp.is_active ? "lock" : "lock_open"}
+                          </span>
+                          {emp.is_active ? "Deactivate" : "Activate"}
                         </DropdownMenuItem>
-                      )}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={() => handleDelete(emp.id)}
-                        className="text-destructive"
-                      >
-                        <span className="material-symbols-outlined text-base mr-2">delete</span>
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+                        <DropdownMenuSeparator />
+                        {emp.has_token ? (
+                          <DropdownMenuItem onClick={() => handleRevokeToken(emp.id)}>
+                            <span className="material-symbols-outlined text-base mr-2" style={{ fontSize: 16 }}>vpn_key_off</span>
+                            Revoke Token
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem onClick={() => handleGenerateToken(emp.id)}>
+                            <span className="material-symbols-outlined text-base mr-2" style={{ fontSize: 16 }}>vpn_key</span>
+                            Generate Token
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onClick={() => handleDelete(emp.id)}
+                          className="text-destructive"
+                        >
+                          <span className="material-symbols-outlined text-base mr-2 " style={{ fontSize: 16 }}>delete</span>
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4">
+          <span className="text-xs text-muted-foreground">
+            Page {page} of {totalPages}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => onPageChange(page - 1)}
+              className="h-8 px-2.5"
+            >
+              <span className="material-symbols-outlined text-sm">chevron_left</span>
+            </Button>
+            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+              let p: number;
+              if (totalPages <= 7) {
+                p = i + 1;
+              } else if (page <= 4) {
+                p = i + 1;
+              } else if (page >= totalPages - 3) {
+                p = totalPages - 6 + i;
+              } else {
+                p = page - 3 + i;
+              }
+              return (
+                <Button
+                  key={p}
+                  variant={p === page ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => onPageChange(p)}
+                  className={`h-8 w-8 p-0 text-xs ${p === page
+                    ? "bg-primary text-primary-foreground"
+                    : ""
+                    }`}
+                >
+                  {p}
+                </Button>
+              );
+            })}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page >= totalPages}
+              onClick={() => onPageChange(page + 1)}
+              className="h-8 px-2.5"
+            >
+              <span className="material-symbols-outlined text-sm">chevron_right</span>
+            </Button>
+          </div>
+        </div>
+      )}
 
       {scopeEmployee && (
         <ScopeDialog

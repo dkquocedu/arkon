@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
@@ -318,11 +319,15 @@ function OrgHeader({
     <div className="px-2 py-1 mb-1">
       <DropdownMenu>
         <DropdownMenuTrigger className="flex items-center gap-2.5 rounded-md px-1.5 py-1.5 hover:bg-black/[0.03] transition-colors cursor-pointer min-w-0 w-full">
-          <div className="w-[22px] h-[22px] rounded-[5px] bg-primary/90 flex items-center justify-center text-white text-[11px] font-bold shrink-0">
-            A
-          </div>
+          <Image
+            src="/logo.png"
+            alt="Arkon"
+            width={24}
+            height={24}
+            className="shrink-0 rounded-[4px]"
+          />
           <div className="flex flex-col items-start min-w-0">
-            <span className="text-[13px] font-semibold text-foreground truncate leading-tight">
+            <span className="text-[15px] font-semibold text-primary truncate leading-tight font-heading">
               Arkon
             </span>
             {user && (
@@ -332,7 +337,7 @@ function OrgHeader({
             )}
           </div>
           <span className="material-symbols-outlined text-[14px] text-muted-foreground/50 ml-auto shrink-0">
-            unfold_more
+            arrow_drop_down
           </span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">
@@ -349,11 +354,6 @@ function OrgHeader({
             <span className="material-symbols-outlined mr-2 text-base">person</span>
             Profile
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push("/settings")}>
-            <span className="material-symbols-outlined mr-2 text-base">settings</span>
-            Settings
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
           <DropdownMenuItem onClick={handleLogout} className="text-destructive">
             <span className="material-symbols-outlined mr-2 text-base">logout</span>
             Sign out

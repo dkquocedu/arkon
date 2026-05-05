@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { PageHeader } from "@/components/shared/page-header";
 import { ProviderConfigCard } from "@/components/settings/provider-config-card";
 
@@ -31,13 +33,23 @@ const defaultConfig: ProviderConfig = {
 };
 
 export default function SettingsPage() {
+  const { user } = useAuth();
+  const router = useRouter();
   const [config, setConfig] = useState<ProviderConfig>(defaultConfig);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
 
+  // Admin guard
   useEffect(() => {
+    if (user && user.role !== "admin") {
+      router.replace("/");
+    }
+  }, [user, router]);
+
+  useEffect(() => {
+    if (user?.role !== "admin") return;
     async function load() {
       try {
         const data = await api<Record<string, unknown>>("/api/settings");
@@ -52,7 +64,7 @@ export default function SettingsPage() {
       }
     }
     load();
-  }, []);
+  }, [user]);
 
   const handleSave = async () => {
     setSaving(true);

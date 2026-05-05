@@ -66,8 +66,8 @@ export function ScopeMembersDialog({ open, onOpenChange, label, scopeType, scope
     if (!open) return;
     setError("");
     loadMembers();
-    api<Employee[]>("/api/employees")
-      .then((emps) => setAllEmployees(emps))
+    api<{ items: Employee[] }>("/api/employees?page_size=200")
+      .then((res) => setAllEmployees(res.items))
       .catch(() => {});
   }, [open, loadMembers]);
 

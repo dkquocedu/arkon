@@ -34,12 +34,26 @@ export type Source = {
   status: string;
   progress?: number;
   progress_message?: string;
+  page_count?: number;
+  wiki_page_count?: number;
   knowledge_type_id?: string;
   knowledge_type_name?: string;
   knowledge_type_color?: string;
   department_id?: string;
   department_name?: string;
+  contributed_by_name?: string;
+  scope_type?: string;
+  scope_id?: string;
   created_at: string;
+  updated_at?: string;
+};
+
+type PaginatedSources = {
+  items: Source[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 };
 
 export default function KnowledgePage() {
@@ -52,28 +66,40 @@ export default function KnowledgePage() {
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState("");
+  const pageSize = 20;
   
   const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [editType, setEditType] = useState<KnowledgeType | null>(null);
 
-  const loadSources = useCallback(async (silent = false) => {
+  const loadSources = useCallback(async (silent = false, p = 1, s = "") => {
     if (!silent) setLoading(true);
     try {
-      const params = new URLSearchParams();
+      const params = new URLSearchParams({
+        page: String(p),
+        page_size: String(pageSize),
+      });
       if (selectedType) {
         const matchedType = types.find((t) => t.slug === selectedType);
         if (matchedType) params.set("knowledge_type_id", matchedType.id);
       }
       if (selectedDepartment) params.set("department_id", selectedDepartment);
+      if (s) params.set("search", s);
 
-      const query = params.toString() ? `?${params.toString()}` : "";
-      const data = await api<Source[]>(`/api/sources${query}`);
-      setSources(Array.isArray(data) ? data : []);
+      const data = await api<PaginatedSources>(`/api/sources?${params}`);
+      setSources(data.items);
+      setTotal(data.total);
+      setTotalPages(data.total_pages);
+      setPage(data.page);
     } catch {
       if (!silent) setSources([]);
     } finally {
       if (!silent) setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedType, selectedDepartment, types]);
 
   // Polling cho trạng thái tài liệu
@@ -82,10 +108,11 @@ export default function KnowledgePage() {
     if (!hasPending) return;
 
     const interval = setInterval(() => {
-      loadSources(true);
+      loadSources(true, page, search);
     }, 3000);
 
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sources, loadSources]);
 
   const loadMeta = useCallback(async () => {
@@ -109,6 +136,17 @@ export default function KnowledgePage() {
   useEffect(() => {
     loadSources();
   }, [loadSources]);
+
+  const handleSearch = (q: string) => {
+    setSearch(q);
+    setPage(1);
+    loadSources(false, 1, q);
+  };
+
+  const handlePageChange = (p: number) => {
+    setPage(p);
+    loadSources(false, p, search);
+  };
 
   return (
     <>
@@ -166,7 +204,13 @@ export default function KnowledgePage() {
                 types={types}
                 departments={departments}
                 loading={loading}
-                onRefresh={loadSources}
+                onRefresh={() => loadSources(false, page, search)}
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                onPageChange={handlePageChange}
+                search={search}
+                onSearch={handleSearch}
               />
             </div>
           </div>
@@ -187,7 +231,7 @@ export default function KnowledgePage() {
         onOpenChange={setUploadOpen}
         types={types}
         departments={departments}
-        onUploaded={loadSources}
+        onUploaded={() => loadSources(false, page, search)}
       />
 
       <KnowledgeTypeDialog

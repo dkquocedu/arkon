@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.registry import ProviderRegistry
@@ -351,19 +352,31 @@ async def compile_source_into_wiki(
                     )
                     updated += 1
                 else:
-                    await wiki_service.apply_create(
-                        session,
-                        slug=slug,
-                        title=str(op.get("title") or slug.split("/")[-1]),
-                        page_type=str(op.get("page_type") or "concept"),
-                        content_md=str(op.get("content_md") or ""),
-                        summary=str(op.get("summary") or ""),
-                        knowledge_type_slugs=[knowledge_type_slug] if knowledge_type_slug else [],
-                        source_ids=[source.id],
-                        scope_type=src_scope_type,
-                        scope_id=src_scope_id,
-                    )
-                    created += 1
+                    try:
+                        # Use a savepoint so IntegrityError doesn't poison the session
+                        async with session.begin_nested():
+                            await wiki_service.apply_create(
+                                session,
+                                slug=slug,
+                                title=str(op.get("title") or slug.split("/")[-1]),
+                                page_type=str(op.get("page_type") or "concept"),
+                                content_md=str(op.get("content_md") or ""),
+                                summary=str(op.get("summary") or ""),
+                                knowledge_type_slugs=[knowledge_type_slug] if knowledge_type_slug else [],
+                                source_ids=[source.id],
+                                scope_type=src_scope_type,
+                                scope_id=src_scope_id,
+                            )
+                        created += 1
+                    except IntegrityError:
+                        # Race condition: another task created this slug concurrently.
+                        # Fallback to update.
+                        logger.info(f"Wiki compile: slug '{slug}' created concurrently, falling back to update")
+                        await _apply_update(
+                            session, op, source, knowledge_type_slug,
+                            scope_type=src_scope_type, scope_id=src_scope_id,
+                        )
+                        updated += 1
                 touched_slugs.append(slug)
 
             elif kind == "update":
