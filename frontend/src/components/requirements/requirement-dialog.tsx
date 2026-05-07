@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-type SimpleRequirement = {
+type EditableRequirement = {
   id: string;
   title: string;
   description?: string;
@@ -31,10 +31,10 @@ type SimpleRequirement = {
 };
 
 type Project = { id: string; name: string };
-type Employee = { id: string; full_name: string };
+type Employee = { id: string; name: string };
 
 type Props = {
-  requirement?: SimpleRequirement | null;
+  requirement?: EditableRequirement | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
@@ -186,7 +186,7 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
                 <SelectItem value="">Unassigned</SelectItem>
                 {employees.map((emp) => (
                   <SelectItem key={emp.id} value={emp.id}>
-                    {emp.full_name}
+                    {emp.name}
                   </SelectItem>
                 ))}
               </SelectContent>

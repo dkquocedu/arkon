@@ -60,7 +60,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                     "title": ur.title,
                     "status": ur.status,
                     "priority": ur.priority,
-                    "assignee": ur.assignee.full_name if ur.assignee else None,
+                    "assignee": ur.assignee.name if ur.assignee else None,
                     "project": ur.project.name if ur.project else None,
                     "labels": [label.name for label in ur.labels],
                     "jira_key": ur.jira_key,
@@ -127,7 +127,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                 "status": ur.status,
                 "priority": ur.priority,
                 "source_text": ur.source_text,
-                "assignee": ur.assignee.full_name if ur.assignee else None,
+                "assignee": ur.assignee.name if ur.assignee else None,
                 "project": ur.project.name if ur.project else None,
                 "labels": [{"name": label.name, "color": label.color} for label in ur.labels],
                 "jira_key": ur.jira_key,
@@ -279,7 +279,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
 
         Args:
             requirement_id: The requirement_id (e.g. UR-2025-001) or UUID.
-            assignee_name: Employee full name, or omit/None to unassign.
+            assignee_name: Employee name, or omit/None to unassign.
         """
         import uuid as _uuid
         from datetime import datetime, timezone
@@ -314,7 +314,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                 await session.commit()
                 return {"requirement_id": ur.requirement_id, "assignee": None, "updated": True}
 
-            emp_stmt = select(Employee).where(Employee.full_name.ilike(f"%{assignee_name}%"))
+            emp_stmt = select(Employee).where(Employee.name.ilike(f"%{assignee_name}%"))
             emp_result = await session.execute(emp_stmt)
             employee = emp_result.scalar_one_or_none()
             if not employee:
@@ -325,6 +325,6 @@ def register_ur_tools(mcp: FastMCP) -> None:
             await session.commit()
             return {
                 "requirement_id": ur.requirement_id,
-                "assignee": employee.full_name,
+                "assignee": employee.name,
                 "updated": True,
             }

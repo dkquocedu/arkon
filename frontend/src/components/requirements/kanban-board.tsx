@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type URLabel = { id: string; name: string; color: string };
+export type URLabel = { id: string; name: string; color: string };
 
 export type KanbanRequirement = {
   id: string;
@@ -12,8 +12,10 @@ export type KanbanRequirement = {
   title: string;
   status: string;
   priority: string;
-  assignee?: { id: string; full_name: string };
-  project?: { id: string; name: string };
+  assignee_id?: string;
+  assignee_name?: string;
+  project_id?: string;
+  project_name?: string;
   labels: URLabel[];
   valid_transitions: string[];
 };
@@ -75,7 +77,6 @@ export function KanbanBoard({ requirements, onChanged }: Props) {
     <div className="flex gap-3 overflow-x-auto pb-4">
       {byStatus.map((col) => (
         <div key={col.key} className="flex-shrink-0 w-60 flex flex-col gap-2">
-          {/* Column header */}
           <div className="flex items-center gap-1.5 px-1 py-1.5">
             <span
               className="material-symbols-outlined text-[15px] text-muted-foreground/60"
@@ -91,7 +92,6 @@ export function KanbanBoard({ requirements, onChanged }: Props) {
             </span>
           </div>
 
-          {/* Cards */}
           <div className="flex flex-col gap-2">
             {col.items.length === 0 && (
               <div className="flex items-center justify-center py-8 rounded-lg border-2 border-dashed border-border/30 text-[12px] text-muted-foreground/30">
@@ -120,10 +120,7 @@ export function KanbanBoard({ requirements, onChanged }: Props) {
                       {req.requirement_id}
                     </span>
                     <span
-                      className={cn(
-                        "material-symbols-outlined text-[13px]",
-                        priorityCfg.className
-                      )}
+                      className={cn("material-symbols-outlined text-[13px]", priorityCfg.className)}
                       style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 13" }}
                     >
                       {priorityCfg.icon}
@@ -148,7 +145,7 @@ export function KanbanBoard({ requirements, onChanged }: Props) {
                     </div>
                   )}
 
-                  {req.assignee && (
+                  {req.assignee_name && (
                     <div className="flex items-center gap-1 mb-2">
                       <span
                         className="material-symbols-outlined text-[12px] text-muted-foreground/40"
@@ -157,7 +154,7 @@ export function KanbanBoard({ requirements, onChanged }: Props) {
                         person
                       </span>
                       <span className="text-[11px] text-muted-foreground/60 truncate">
-                        {req.assignee.full_name}
+                        {req.assignee_name}
                       </span>
                     </div>
                   )}

@@ -17,15 +17,9 @@ import {
 import { RequirementList, type ListRequirement } from "@/components/requirements/requirement-list";
 import { RequirementDialog } from "@/components/requirements/requirement-dialog";
 
-type URListResponse = {
-  items: ListRequirement[];
-  total: number;
-};
-
 export default function RequirementsPage() {
   const { canAccess } = useAuth();
   const [requirements, setRequirements] = useState<ListRequirement[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -41,9 +35,8 @@ export default function RequirementsPage() {
       if (statusFilter) params.set("status", statusFilter);
       if (priorityFilter) params.set("priority", priorityFilter);
       params.set("limit", "200");
-      const data = await api<URListResponse>(`/api/requirements?${params.toString()}`);
-      setRequirements(data.items);
-      setTotal(data.total);
+      const data = await api<ListRequirement[]>(`/api/requirements?${params.toString()}`);
+      setRequirements(data);
     } catch {
       setRequirements([]);
     } finally {
@@ -94,7 +87,7 @@ export default function RequirementsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Requirements"
-        description={`${total} user requirement${total !== 1 ? "s" : ""}`}
+        description={`${requirements.length} user requirement${requirements.length !== 1 ? "s" : ""}`}
         action={
           <div className="flex items-center gap-2">
             <Link href="/requirements/kanban">
@@ -121,7 +114,6 @@ export default function RequirementsPage() {
         }
       />
 
-      {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48 max-w-72">
           <span

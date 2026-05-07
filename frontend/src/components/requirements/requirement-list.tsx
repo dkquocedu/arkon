@@ -8,7 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-type URLabel = { id: string; name: string; color: string };
+export type URLabel = { id: string; name: string; color: string; description?: string };
 
 export type ListRequirement = {
   id: string;
@@ -19,13 +19,15 @@ export type ListRequirement = {
   status: string;
   priority: string;
   project_id?: string;
+  project_name?: string;
   assignee_id?: string;
-  assignee?: { id: string; full_name: string };
-  project?: { id: string; name: string };
+  assignee_name?: string;
+  source_text?: string;
+  jira_key?: string;
   labels: URLabel[];
   valid_transitions: string[];
-  jira_key?: string;
   created_at: string;
+  updated_at: string;
 };
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
@@ -136,9 +138,9 @@ export function RequirementList({
                   >
                     {req.title}
                   </button>
-                  {req.project && (
+                  {req.project_name && (
                     <div className="text-[11px] text-muted-foreground/60 mt-0.5">
-                      {req.project.name}
+                      {req.project_name}
                     </div>
                   )}
                 </td>
@@ -162,7 +164,8 @@ export function RequirementList({
                             key={t}
                             onClick={() => onStatusChange(req.id, t)}
                           >
-                            <span className="material-symbols-outlined text-[14px] mr-2 text-muted-foreground"
+                            <span
+                              className="material-symbols-outlined text-[14px] mr-2 text-muted-foreground"
                               style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 14" }}
                             >
                               arrow_forward
@@ -202,7 +205,7 @@ export function RequirementList({
                 </td>
 
                 <td className="py-2.5 px-3 text-[12px] text-muted-foreground">
-                  {req.assignee?.full_name ?? (
+                  {req.assignee_name ?? (
                     <span className="italic opacity-40">Unassigned</span>
                   )}
                 </td>
@@ -223,9 +226,7 @@ export function RequirementList({
 
                 <td className="py-2.5 px-3">
                   {req.jira_key && (
-                    <span className="font-mono text-[11px] text-blue-600">
-                      {req.jira_key}
-                    </span>
+                    <span className="font-mono text-[11px] text-blue-600">{req.jira_key}</span>
                   )}
                 </td>
 

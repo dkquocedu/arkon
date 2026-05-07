@@ -7,13 +7,14 @@ import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { KanbanBoard, type KanbanRequirement } from "@/components/requirements/kanban-board";
 
+type KanbanCol = {
+  status: string;
+  label: string;
+  items: KanbanRequirement[];
+};
+
 type KanbanResponse = {
-  draft: KanbanRequirement[];
-  analysis: KanbanRequirement[];
-  approved: KanbanRequirement[];
-  dev_ready: KanbanRequirement[];
-  done: KanbanRequirement[];
-  rejected: KanbanRequirement[];
+  columns: KanbanCol[];
 };
 
 export default function KanbanPage() {
@@ -24,10 +25,7 @@ export default function KanbanPage() {
     setLoading(true);
     try {
       const data = await api<KanbanResponse>("/api/requirements/kanban");
-      const all = (
-        Object.values(data) as KanbanRequirement[][]
-      ).flat();
-      setRequirements(all);
+      setRequirements(data.columns.flatMap((col) => col.items));
     } catch {
       setRequirements([]);
     } finally {
