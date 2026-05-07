@@ -51,6 +51,14 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    id: "requirements",
+    label: "Requirements",
+    items: [
+      { label: "All Requirements", href: "/requirements", icon: "checklist" },
+      { label: "Kanban Board", href: "/requirements/kanban", icon: "view_kanban" },
+    ],
+  },
+  {
     id: "organization",
     label: "Organization",
     requiredPermissions: ["org:departments:read", "org:employees:read", "org:roles:read"],
