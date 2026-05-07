@@ -113,13 +113,16 @@ from app.routers import (  # noqa: E402
     admin_settings,
     audit,
     auth,
+    jira_integration,
     knowledge_types,
     notes,
     projects,
     rbac,
+    requirements,
     roles,
     skills,
     sources,
+    ur_labels,
     wiki,
     wiki_drafts,
     wiki_images,
@@ -139,6 +142,9 @@ app.include_router(projects.router, prefix="/api", tags=["projects"])
 app.include_router(roles.router, prefix="/api", tags=["roles"])
 app.include_router(audit.router, prefix="/api", tags=["audit"])
 app.include_router(skills.router, prefix="/api", tags=["skills"])
+app.include_router(requirements.router, prefix="/api", tags=["requirements"])
+app.include_router(ur_labels.router, prefix="/api", tags=["requirements"])
+app.include_router(jira_integration.router, prefix="/api", tags=["jira"])
 
 
 @app.get("/")

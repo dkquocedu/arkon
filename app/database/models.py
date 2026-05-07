@@ -14,12 +14,14 @@ from typing import Optional
 from pgvector.sqlalchemy import HALFVEC, Vector
 from sqlalchemy import (
     Boolean,
+    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     PrimaryKeyConstraint,
     String,
+    Table,
     Text,
     UniqueConstraint,
     func,
@@ -126,7 +128,7 @@ class Source(Base):
 
 
 class SourceDepartment(Base):
-    """Many-to-many: Source ↔ Department.
+    """Many-to-many: Source <-> Department.
     A source with NO rows here is considered Global (visible to all).
     """
     __tablename__ = "source_departments"
@@ -211,9 +213,6 @@ class WikiPage(Base):
     source_ids: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(UUID(as_uuid=True)), nullable=False, default=list,
     )
-    # Embeddings live in per-dimension tables (wiki_page_embeddings_<dim>) so
-    # different embedding models with different output sizes can coexist.
-    # See app/ai/embedding_catalog.py and migration 015.
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     orphaned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -649,7 +648,7 @@ class Skill(Base):
 
 
 class SkillDepartment(Base):
-    """Many-to-many: Skill ↔ Department.
+    """Many-to-many: Skill <-> Department.
     A skill with NO rows here is considered Global (visible to all).
     """
     __tablename__ = "skill_departments"
@@ -846,4 +845,136 @@ class EmbeddingJob(Base):
 
     __table_args__ = (
         Index("ix_embedding_jobs_status", "status", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# UR Lifecycle — User Requirements
+# ---------------------------------------------------------------------------
+
+class URStatus(str, PyEnum):
+    """Lifecycle states for a User Requirement."""
+    DRAFT = "draft"
+    ANALYSIS = "analysis"
+    APPROVED = "approved"
+    DEV_READY = "dev_ready"
+    DONE = "done"
+    REJECTED = "rejected"
+
+
+class URPriority(str, PyEnum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+# M2M: UserRequirement <-> URLabel
+ur_label_association = Table(
+    "ur_label_association",
+    Base.metadata,
+    Column(
+        "ur_id",
+        UUID(as_uuid=True),
+        ForeignKey("user_requirements.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "label_id",
+        UUID(as_uuid=True),
+        ForeignKey("ur_labels.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+class URLabel(Base):
+    """Color-coded tag for User Requirements."""
+    __tablename__ = "ur_labels"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    color: Mapped[str] = mapped_column(String(7), nullable=False, default="#6b7280")
+    description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    requirements: Mapped[list["UserRequirement"]] = relationship(
+        secondary=ur_label_association, back_populates="labels"
+    )
+
+
+class UserRequirement(Base):
+    """
+    A User Requirement with lifecycle management.
+    Status flow: draft -> analysis -> approved -> dev_ready -> done (or rejected at any step).
+    """
+    __tablename__ = "user_requirements"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    requirement_id: Mapped[str] = mapped_column(
+        String(50), unique=True, nullable=False,
+        comment="Human-readable ID, e.g. UR-2026-001",
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    acceptance_criteria: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft",
+        comment="draft | analysis | approved | dev_ready | done | rejected",
+    )
+    priority: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="medium",
+        comment="critical | high | medium | low",
+    )
+    source_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    assignee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("employees.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    jira_key: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    jira_url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    source_document: Mapped[Optional["Source"]] = relationship(
+        foreign_keys=[source_document_id]
+    )
+    project: Mapped[Optional["Project"]] = relationship(
+        foreign_keys=[project_id]
+    )
+    assignee: Mapped[Optional["Employee"]] = relationship(
+        foreign_keys=[assignee_id]
+    )
+    labels: Mapped[list["URLabel"]] = relationship(
+        secondary=ur_label_association, back_populates="requirements"
+    )
+
+    __table_args__ = (
+        Index("ix_user_requirements_status", "status"),
+        Index("ix_user_requirements_project_id", "project_id"),
+        Index("ix_user_requirements_assignee_id", "assignee_id"),
     )
