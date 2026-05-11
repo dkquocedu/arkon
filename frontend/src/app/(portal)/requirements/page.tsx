@@ -130,7 +130,7 @@ export default function RequirementsPage() {
           />
         </div>
 
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? "")}>
           <SelectTrigger className="w-36 h-8 text-sm">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
@@ -145,7 +145,7 @@ export default function RequirementsPage() {
           </SelectContent>
         </Select>
 
-        <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+        <Select value={priorityFilter} onValueChange={(v) => setPriorityFilter(v ?? "")}>
           <SelectTrigger className="w-32 h-8 text-sm">
             <SelectValue placeholder="All priorities" />
           </SelectTrigger>

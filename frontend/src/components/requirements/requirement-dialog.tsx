@@ -33,6 +33,15 @@ type EditableRequirement = {
 type Project = { id: string; name: string };
 type Employee = { id: string; name: string };
 
+type FormState = {
+  title: string;
+  description: string;
+  acceptanceCriteria: string;
+  priority: string;
+  projectId: string;
+  assigneeId: string;
+};
+
 type Props = {
   requirement?: EditableRequirement | null;
   open: boolean;
@@ -40,26 +49,31 @@ type Props = {
   onSaved: () => void;
 };
 
+const EMPTY_FORM: FormState = {
+  title: "",
+  description: "",
+  acceptanceCriteria: "",
+  priority: "medium",
+  projectId: "",
+  assigneeId: "",
+};
+
 export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
-  const [priority, setPriority] = useState("medium");
-  const [projectId, setProjectId] = useState("");
-  const [assigneeId, setAssigneeId] = useState("");
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
   useEffect(() => {
     if (!open) return;
-    setTitle(requirement?.title ?? "");
-    setDescription(requirement?.description ?? "");
-    setAcceptanceCriteria(requirement?.acceptance_criteria ?? "");
-    setPriority(requirement?.priority ?? "medium");
-    setProjectId(requirement?.project_id ?? "");
-    setAssigneeId(requirement?.assignee_id ?? "");
-
+    setForm({
+      title: requirement?.title ?? "",
+      description: requirement?.description ?? "",
+      acceptanceCriteria: requirement?.acceptance_criteria ?? "",
+      priority: requirement?.priority ?? "medium",
+      projectId: requirement?.project_id ?? "",
+      assigneeId: requirement?.assignee_id ?? "",
+    });
     Promise.all([
       api<Project[]>("/api/projects").catch(() => []),
       api<Employee[] | { items: Employee[] }>("/api/employees").catch(() => []),
@@ -71,16 +85,16 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!form.title.trim()) return;
     setSaving(true);
     try {
       const body = {
-        title: title.trim(),
-        description: description.trim() || null,
-        acceptance_criteria: acceptanceCriteria.trim() || null,
-        priority,
-        project_id: projectId || null,
-        assignee_id: assigneeId || null,
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        acceptance_criteria: form.acceptanceCriteria.trim() || null,
+        priority: form.priority,
+        project_id: form.projectId || null,
+        assignee_id: form.assigneeId || null,
       };
       if (requirement) {
         await api(`/api/requirements/${requirement.id}`, {
@@ -113,8 +127,8 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
             <Label htmlFor="ur-title">Title *</Label>
             <Input
               id="ur-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
               placeholder="Requirement title"
               required
             />
@@ -124,8 +138,8 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
             <Label htmlFor="ur-desc">Description</Label>
             <Textarea
               id="ur-desc"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               placeholder="Detailed description"
               rows={3}
             />
@@ -135,8 +149,8 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
             <Label htmlFor="ur-ac">Acceptance Criteria</Label>
             <Textarea
               id="ur-ac"
-              value={acceptanceCriteria}
-              onChange={(e) => setAcceptanceCriteria(e.target.value)}
+              value={form.acceptanceCriteria}
+              onChange={(e) => setForm((f) => ({ ...f, acceptanceCriteria: e.target.value }))}
               placeholder="Given / When / Then"
               rows={3}
             />
@@ -145,7 +159,10 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Priority</Label>
-              <Select value={priority} onValueChange={setPriority}>
+              <Select
+                value={form.priority}
+                onValueChange={(v) => setForm((f) => ({ ...f, priority: v ?? "medium" }))}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -160,7 +177,10 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
 
             <div className="space-y-1.5">
               <Label>Project</Label>
-              <Select value={projectId} onValueChange={setProjectId}>
+              <Select
+                value={form.projectId}
+                onValueChange={(v) => setForm((f) => ({ ...f, projectId: v ?? "" }))}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="None" />
                 </SelectTrigger>
@@ -178,7 +198,10 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
 
           <div className="space-y-1.5">
             <Label>Assignee</Label>
-            <Select value={assigneeId} onValueChange={setAssigneeId}>
+            <Select
+              value={form.assigneeId}
+              onValueChange={(v) => setForm((f) => ({ ...f, assigneeId: v ?? "" }))}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Unassigned" />
               </SelectTrigger>
@@ -197,7 +220,7 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving || !title.trim()}>
+            <Button type="submit" disabled={saving || !form.title.trim()}>
               {saving ? "Saving…" : requirement ? "Save Changes" : "Create"}
             </Button>
           </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useTransition, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/shared/page-header";
@@ -19,18 +19,17 @@ type KanbanResponse = {
 
 export default function KanbanPage() {
   const [requirements, setRequirements] = useState<KanbanRequirement[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [isPending, startTransition] = useTransition();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await api<KanbanResponse>("/api/requirements/kanban");
-      setRequirements(data.columns.flatMap((col) => col.items));
-    } catch {
-      setRequirements([]);
-    } finally {
-      setLoading(false);
-    }
+  const load = useCallback(() => {
+    startTransition(async () => {
+      try {
+        const data = await api<KanbanResponse>("/api/requirements/kanban");
+        setRequirements(data.columns.flatMap((col) => col.items));
+      } catch {
+        setRequirements([]);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -57,7 +56,7 @@ export default function KanbanPage() {
         }
       />
 
-      {loading ? (
+      {isPending ? (
         <div className="flex items-center justify-center py-32">
           <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
             progress_activity

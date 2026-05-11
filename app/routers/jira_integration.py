@@ -3,6 +3,7 @@ Jira integration router — push approved URs to Jira and sync status back.
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -73,7 +74,6 @@ async def push_to_jira(
     total_failed = 0
 
     for req_id_str in data.requirement_ids:
-        import uuid
         try:
             rid = uuid.UUID(req_id_str)
         except ValueError:

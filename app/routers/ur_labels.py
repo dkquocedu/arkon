@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -64,7 +65,11 @@ async def create_label(
 ):
     lb = URLabel(name=data.name, color=data.color, description=data.description)
     db.add(lb)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, f"Label '{data.name}' already exists")
     return _out(lb)
 
 
@@ -84,7 +89,11 @@ async def update_label(
         lb.color = data.color
     if data.description is not None:
         lb.description = data.description
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, f"Label name '{data.name}' already exists")
     return _out(lb)
 
 

@@ -12,13 +12,14 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.database.models import Employee, URLabel, UserRequirement
+from app.database.models import Employee, Project, URLabel, UserRequirement
 from app.services.auth_service import get_current_user
 
 router = APIRouter()
@@ -42,6 +43,8 @@ STATUS_LABELS = {
 }
 
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
+
+_MAX_ID_RETRIES = 5
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +83,7 @@ class UROut(BaseModel):
 
 
 class URCreate(BaseModel):
-    title: str
+    title: str = Field(..., min_length=1, max_length=500)
     description: Optional[str] = None
     acceptance_criteria: Optional[str] = None
     priority: str = "medium"
@@ -89,6 +92,13 @@ class URCreate(BaseModel):
     assignee_id: Optional[str] = None
     source_text: Optional[str] = None
     label_ids: list[str] = []
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, v: str) -> str:
+        if isinstance(v, str):
+            v = v.strip()
+        return v
 
 
 class URUpdate(BaseModel):
@@ -121,6 +131,15 @@ class KanbanBoard(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _parse_uuid_field(value: Optional[str], field_name: str) -> Optional[uuid.UUID]:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(400, f"Invalid UUID for '{field_name}': {value!r}")
+
 
 def _ur_out(ur: UserRequirement) -> UROut:
     return UROut(
@@ -172,12 +191,19 @@ async def _generate_requirement_id(db: AsyncSession) -> str:
     year = datetime.now(timezone.utc).year
     prefix = f"UR-{year}-"
     result = await db.execute(
-        select(func.count()).select_from(UserRequirement).where(
+        select(func.max(UserRequirement.requirement_id)).where(
             UserRequirement.requirement_id.like(f"{prefix}%")
         )
     )
-    count = result.scalar() or 0
-    return f"{prefix}{count + 1:03d}"
+    max_id = result.scalar()
+    if max_id:
+        try:
+            num = int(max_id.split("-")[-1]) + 1
+        except (ValueError, IndexError):
+            num = 1
+    else:
+        num = 1
+    return f"{prefix}{num:03d}"
 
 
 # ---------------------------------------------------------------------------
@@ -212,11 +238,17 @@ async def list_requirements(
     if priority:
         stmt = stmt.where(UserRequirement.priority == priority)
     if project_id:
-        stmt = stmt.where(UserRequirement.project_id == uuid.UUID(project_id))
+        stmt = stmt.where(
+            UserRequirement.project_id == _parse_uuid_field(project_id, "project_id")
+        )
     if assignee_id:
-        stmt = stmt.where(UserRequirement.assignee_id == uuid.UUID(assignee_id))
+        stmt = stmt.where(
+            UserRequirement.assignee_id == _parse_uuid_field(assignee_id, "assignee_id")
+        )
     if label_id:
-        stmt = stmt.where(UserRequirement.labels.any(URLabel.id == uuid.UUID(label_id)))
+        stmt = stmt.where(
+            UserRequirement.labels.any(URLabel.id == _parse_uuid_field(label_id, "label_id"))
+        )
     if search:
         like = f"%{search}%"
         stmt = stmt.where(
@@ -245,9 +277,13 @@ async def get_kanban(
         .order_by(UserRequirement.updated_at.desc())
     )
     if project_id:
-        stmt = stmt.where(UserRequirement.project_id == uuid.UUID(project_id))
+        stmt = stmt.where(
+            UserRequirement.project_id == _parse_uuid_field(project_id, "project_id")
+        )
     if assignee_id:
-        stmt = stmt.where(UserRequirement.assignee_id == uuid.UUID(assignee_id))
+        stmt = stmt.where(
+            UserRequirement.assignee_id == _parse_uuid_field(assignee_id, "assignee_id")
+        )
 
     result = await db.execute(stmt)
     all_urs = result.scalars().all()
@@ -269,7 +305,10 @@ async def get_requirement(
     db: AsyncSession = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
-    return _ur_out(await _load_ur(db, uuid.UUID(requirement_id)))
+    ur_uuid = _parse_uuid_field(requirement_id, "requirement_id")
+    if not ur_uuid:
+        raise HTTPException(400, "requirement_id is required")
+    return _ur_out(await _load_ur(db, ur_uuid))
 
 
 @router.post("/requirements", response_model=UROut, status_code=201)
@@ -281,28 +320,55 @@ async def create_requirement(
     if data.priority and data.priority not in VALID_PRIORITIES:
         raise HTTPException(400, f"priority must be one of: {sorted(VALID_PRIORITIES)}")
 
+    project_uuid = _parse_uuid_field(data.project_id, "project_id")
+    assignee_uuid = _parse_uuid_field(data.assignee_id, "assignee_id")
+    source_uuid = _parse_uuid_field(data.source_document_id, "source_document_id")
+
+    if project_uuid and not await db.get(Project, project_uuid):
+        raise HTTPException(400, f"Project '{data.project_id}' not found")
+    if assignee_uuid and not await db.get(Employee, assignee_uuid):
+        raise HTTPException(400, f"Assignee '{data.assignee_id}' not found")
+
     labels: list[URLabel] = []
     if data.label_ids:
         label_uuids = [uuid.UUID(lid) for lid in data.label_ids]
         res = await db.execute(select(URLabel).where(URLabel.id.in_(label_uuids)))
         labels = list(res.scalars().all())
 
-    req_id = await _generate_requirement_id(db)
-    ur = UserRequirement(
-        requirement_id=req_id,
-        title=data.title,
-        description=data.description,
-        acceptance_criteria=data.acceptance_criteria,
-        priority=data.priority or "medium",
-        source_document_id=uuid.UUID(data.source_document_id) if data.source_document_id else None,
-        project_id=uuid.UUID(data.project_id) if data.project_id else None,
-        assignee_id=uuid.UUID(data.assignee_id) if data.assignee_id else None,
-        source_text=data.source_text,
-        status="draft",
-    )
-    ur.labels = labels
-    db.add(ur)
-    await db.flush()
+    ur: UserRequirement
+    for attempt in range(_MAX_ID_RETRIES):
+        try:
+            req_id = await _generate_requirement_id(db)
+            ur = UserRequirement(
+                requirement_id=req_id,
+                title=data.title,
+                description=data.description,
+                acceptance_criteria=data.acceptance_criteria,
+                priority=data.priority or "medium",
+                source_document_id=source_uuid,
+                project_id=project_uuid,
+                assignee_id=assignee_uuid,
+                source_text=data.source_text,
+                status="draft",
+            )
+            ur.labels = labels
+            db.add(ur)
+            await db.flush()
+            break
+        except IntegrityError:
+            await db.rollback()
+            if attempt == _MAX_ID_RETRIES - 1:
+                raise HTTPException(
+                    500, "Could not generate a unique requirement ID after retries"
+                )
+            # Re-fetch labels after rollback since session state is reset
+            if data.label_ids:
+                label_uuids = [uuid.UUID(lid) for lid in data.label_ids]
+                res = await db.execute(select(URLabel).where(URLabel.id.in_(label_uuids)))
+                labels = list(res.scalars().all())
+            else:
+                labels = []
+
     return _ur_out(await _load_ur(db, ur.id))
 
 
@@ -313,7 +379,10 @@ async def update_requirement(
     db: AsyncSession = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
-    ur = await _load_ur(db, uuid.UUID(requirement_id))
+    ur_uuid = _parse_uuid_field(requirement_id, "requirement_id")
+    if not ur_uuid:
+        raise HTTPException(400, "requirement_id is required")
+    ur = await _load_ur(db, ur_uuid)
     update_data = data.model_dump(exclude_unset=True)
 
     new_status = update_data.get("status")
@@ -335,11 +404,12 @@ async def update_requirement(
 
     for field, value in update_data.items():
         if field in ("source_document_id", "project_id", "assignee_id"):
-            setattr(ur, field, uuid.UUID(value) if value else None)
+            setattr(ur, field, _parse_uuid_field(value, field) if value else None)
         else:
             setattr(ur, field, value)
 
     await db.flush()
+    db.expire(ur)  # force SQLAlchemy to reload relationships from DB
     return _ur_out(await _load_ur(db, ur.id))
 
 
@@ -350,7 +420,10 @@ async def update_status(
     db: AsyncSession = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
-    ur = await _load_ur(db, uuid.UUID(requirement_id))
+    ur_uuid = _parse_uuid_field(requirement_id, "requirement_id")
+    if not ur_uuid:
+        raise HTTPException(400, "requirement_id is required")
+    ur = await _load_ur(db, ur_uuid)
     allowed = VALID_TRANSITIONS.get(ur.status, [])
     if data.status not in allowed:
         raise HTTPException(
@@ -361,6 +434,7 @@ async def update_status(
     if data.status == "approved":
         ur.approved_at = datetime.now(timezone.utc)
     await db.flush()
+    db.expire(ur)  # force reload relationships
     return _ur_out(await _load_ur(db, ur.id))
 
 
@@ -372,7 +446,10 @@ async def delete_requirement(
 ):
     if current_user.role != "admin":
         raise HTTPException(403, "Admin access required to delete requirements")
-    ur = await db.get(UserRequirement, uuid.UUID(requirement_id))
+    ur_uuid = _parse_uuid_field(requirement_id, "requirement_id")
+    if not ur_uuid:
+        raise HTTPException(400, "requirement_id is required")
+    ur = await db.get(UserRequirement, ur_uuid)
     if not ur:
         raise HTTPException(404, "Requirement not found")
     await db.delete(ur)

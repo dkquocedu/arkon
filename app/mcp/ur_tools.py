@@ -38,6 +38,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                     selectinload(UserRequirement.labels),
                     selectinload(UserRequirement.project),
                     selectinload(UserRequirement.assignee),
+                    selectinload(UserRequirement.source_document),
                 )
                 .order_by(UserRequirement.created_at.desc())
                 .limit(limit)
@@ -62,6 +63,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                     "priority": ur.priority,
                     "assignee": ur.assignee.name if ur.assignee else None,
                     "project": ur.project.name if ur.project else None,
+                    "source_document": ur.source_document.title if ur.source_document else None,
                     "labels": [label.name for label in ur.labels],
                     "jira_key": ur.jira_key,
                     "created_at": ur.created_at.isoformat() if ur.created_at else None,
@@ -92,6 +94,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                     selectinload(UserRequirement.labels),
                     selectinload(UserRequirement.project),
                     selectinload(UserRequirement.assignee),
+                    selectinload(UserRequirement.source_document),
                 )
                 .where(UserRequirement.requirement_id == requirement_id)
             )
@@ -107,6 +110,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                             selectinload(UserRequirement.labels),
                             selectinload(UserRequirement.project),
                             selectinload(UserRequirement.assignee),
+                            selectinload(UserRequirement.source_document),
                         )
                         .where(UserRequirement.id == uid)
                     )
@@ -129,6 +133,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
                 "source_text": ur.source_text,
                 "assignee": ur.assignee.name if ur.assignee else None,
                 "project": ur.project.name if ur.project else None,
+                "source_document": ur.source_document.title if ur.source_document else None,
                 "labels": [{"name": label.name, "color": label.color} for label in ur.labels],
                 "jira_key": ur.jira_key,
                 "jira_url": ur.jira_url,
@@ -165,14 +170,20 @@ def register_ur_tools(mcp: FastMCP) -> None:
         async with async_session_factory() as session:
             year = datetime.now(timezone.utc).year
             prefix = f"UR-{year}-"
-            count_stmt = (
-                select(func.count())
-                .select_from(UserRequirement)
+            max_stmt = (
+                select(func.max(UserRequirement.requirement_id))
                 .where(UserRequirement.requirement_id.like(f"{prefix}%"))
             )
-            count_result = await session.execute(count_stmt)
-            count = count_result.scalar() or 0
-            req_id = f"{prefix}{str(count + 1).zfill(3)}"
+            max_result = await session.execute(max_stmt)
+            max_id = max_result.scalar()
+            if max_id:
+                try:
+                    num = int(max_id.split("-")[-1]) + 1
+                except (ValueError, IndexError):
+                    num = 1
+            else:
+                num = 1
+            req_id = f"{prefix}{num:03d}"
 
             ur = UserRequirement(
                 requirement_id=req_id,
