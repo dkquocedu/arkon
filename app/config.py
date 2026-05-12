@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """
     Infrastructure settings loaded from .env or environment.
-    
+
     AI provider settings (embedding, LLM, vision) are NOT here —
     they are stored in the database and managed via Admin Portal.
     See: app/services/config_service.py and app/ai/registry.py
@@ -60,6 +60,24 @@ class Settings(BaseSettings):
     redis_db: int = Field(default=0)
     worker_max_jobs: int = Field(default=3, description="Max concurrent ingestion jobs")
     worker_job_timeout: int = Field(default=1800, description="Job timeout in seconds")
+
+    # --- Jira Integration ---
+    jira_base_url: str = Field(
+        default="",
+        description="Jira base URL, e.g. https://mycompany.atlassian.net",
+    )
+    jira_email: str = Field(
+        default="",
+        description="Jira user email for Basic Auth (API token auth)",
+    )
+    jira_api_token: str = Field(
+        default="",
+        description="Jira API token (from https://id.atlassian.com/manage-profile/security/api-tokens)",
+    )
+    jira_project_key: str = Field(
+        default="",
+        description="Jira project key to create issues in, e.g. PROJ",
+    )
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

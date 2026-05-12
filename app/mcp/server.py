@@ -28,6 +28,7 @@ from fastmcp import FastMCP
 
 from app.mcp.resources import register_resources
 from app.mcp.tools import register_tools
+from app.mcp.ur_tools import register_ur_tools
 
 
 def create_mcp_server() -> FastMCP:
@@ -45,12 +46,15 @@ def create_mcp_server() -> FastMCP:
             "so a single page often answers cross-document questions. Drill into raw "
             "sources via `get_source_outline` and `get_source_pages` only when you need "
             "exact citations or details the wiki has paraphrased. "
-            "Cite slugs (wiki) and source IDs (raw) when answering."
+            "Cite slugs (wiki) and source IDs (raw) when answering. "
+            "Use `list_requirements` and `read_requirement` to query user requirements, "
+            "and `update_requirement_status` / `assign_requirement` to manage their lifecycle."
         ),
     )
 
     # Register all tools and resources
     register_tools(mcp)
+    register_ur_tools(mcp)
     register_resources(mcp)
 
     return mcp
