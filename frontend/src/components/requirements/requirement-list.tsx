@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -126,9 +127,11 @@ export function RequirementList({
             return (
               <tr key={req.id} className="group hover:bg-black/[0.02] transition-colors">
                 <td className="py-2.5 px-3">
-                  <span className="font-mono text-[11px] text-muted-foreground/70">
-                    {req.requirement_id}
-                  </span>
+                  <Link href={`/requirements/${req.id}`}>
+                    <span className="font-mono text-[11px] text-muted-foreground/70 hover:text-primary hover:underline cursor-pointer">
+                      {req.requirement_id}
+                    </span>
+                  </Link>
                 </td>
 
                 <td className="py-2.5 px-3">
