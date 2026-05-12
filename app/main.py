@@ -12,7 +12,6 @@ from loguru import logger
 from app.config import settings
 from app.mcp.server import create_mcp_server
 
-# Create the MCP server and its HTTP app (lifespan must be composed with FastAPI)
 mcp_server = create_mcp_server()
 mcp_http_app = mcp_server.http_app(path="/", stateless_http=True)
 
@@ -27,18 +26,15 @@ async def seed_default_admin():
 
     try:
         async with async_session_factory() as session:
-            # Check if any admin already exists
             stmt = select(Employee).where(Employee.role == "admin").limit(1)
             result = await session.execute(stmt)
             if result.scalar_one_or_none():
-                return  # Admin already exists, skip
+                return
 
-            # Create admin department
             dept = Department(name="Administration", description="System administrators")
             session.add(dept)
             await session.flush()
 
-            # Create admin user from .env
             admin = Employee(
                 name="Admin",
                 email=settings.default_admin_email,
@@ -57,11 +53,9 @@ async def seed_default_admin():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup & shutdown logic (composed with FastMCP lifespan)."""
     async with mcp_http_app.lifespan(app):
         logger.info("Starting Arkon API...")
 
-        # Ensure MinIO bucket exists
         try:
             from app.services.storage_service import storage_service
             await storage_service.ensure_bucket()
@@ -69,16 +63,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"MinIO not available yet: {e}")
 
-        # Seed default admin if no admin exists yet
         await seed_default_admin()
 
-        # Warn if sensitive defaults are unchanged
         if settings.secret_key == "change-me-to-a-random-secret-string":
             logger.warning("⚠️  SECRET_KEY is set to the default value — change it before deploying to production!")
         if settings.default_admin_password == "admin123":
             logger.warning("⚠️  DEFAULT_ADMIN_PASSWORD is 'admin123' — change the admin password after first login!")
 
-        # MCP server ready
         logger.success("Arkon MCP Server ready at /mcp")
         logger.success("Arkon API started successfully")
         yield
@@ -93,7 +84,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# --- CORS ---
 logger.info(f"Allowed CORS origins: {settings.cors_origin_list}")
 app.add_middleware(
     CORSMiddleware,
@@ -103,11 +93,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Mount MCP Server ---
-# Claude Desktop connects to: https://your-server/mcp
 app.mount("/mcp", mcp_http_app)
 
-# --- REST API Routers ---
 from app.routers import (  # noqa: E402
     admin_embeddings,
     admin_settings,
@@ -123,6 +110,7 @@ from app.routers import (  # noqa: E402
     skills,
     sources,
     ur_labels,
+    user_stories,
     wiki,
     wiki_drafts,
     wiki_images,
@@ -144,6 +132,7 @@ app.include_router(audit.router, prefix="/api", tags=["audit"])
 app.include_router(skills.router, prefix="/api", tags=["skills"])
 app.include_router(requirements.router, prefix="/api", tags=["requirements"])
 app.include_router(ur_labels.router, prefix="/api", tags=["requirements"])
+app.include_router(user_stories.router, prefix="/api", tags=["user-stories"])
 app.include_router(jira_integration.router, prefix="/api", tags=["jira"])
 
 
@@ -163,10 +152,8 @@ async def health():
     services = {}
     overall = "healthy"
 
-    # Database
     try:
         from sqlalchemy import text
-
         from app.database import async_session_factory
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
@@ -176,7 +163,6 @@ async def health():
         overall = "degraded"
         logger.warning(f"Health check — database error: {e}")
 
-    # Redis
     try:
         from app.routers.sources import get_arq_pool
         pool = await get_arq_pool()
@@ -187,7 +173,6 @@ async def health():
         overall = "degraded"
         logger.warning(f"Health check — redis error: {e}")
 
-    # MinIO
     try:
         from app.services.storage_service import storage_service
         await storage_service.ensure_bucket()
@@ -202,16 +187,10 @@ async def health():
 
 @app.get("/api/health")
 async def api_health():
-    """Detailed health check for API, database, and worker (Redis)."""
     from sqlalchemy import text
-
     from app.database import async_session_factory
 
-    result = {
-        "api": "healthy",
-        "database": "error",
-        "worker": "error",
-    }
+    result = {"api": "healthy", "database": "error", "worker": "error"}
 
     try:
         async with async_session_factory() as session:

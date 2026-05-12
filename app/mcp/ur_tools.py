@@ -354,3 +354,148 @@ def register_ur_tools(mcp: FastMCP) -> None:
                 "assignee": employee.name,
                 "updated": True,
             }
+
+    @mcp.tool()
+    async def list_user_stories(requirement_id: str) -> list[dict]:
+        """
+        List user stories generated for a requirement.
+
+        Args:
+            requirement_id: The requirement_id (e.g. UR-2026-001) or UUID.
+        """
+        import uuid as _uuid
+
+        from sqlalchemy import select
+
+        from app.database import async_session_factory
+        from app.database.models import UserRequirement, UserStory
+
+        async with async_session_factory() as session:
+            stmt = select(UserRequirement).where(
+                UserRequirement.requirement_id == requirement_id
+            )
+            result = await session.execute(stmt)
+            ur = result.scalar_one_or_none()
+            if not ur:
+                try:
+                    uid = _uuid.UUID(requirement_id)
+                    stmt2 = select(UserRequirement).where(UserRequirement.id == uid)
+                    result2 = await session.execute(stmt2)
+                    ur = result2.scalar_one_or_none()
+                except ValueError:
+                    pass
+            if not ur:
+                return [{"error": f"Requirement '{requirement_id}' not found"}]
+
+            stories_result = await session.execute(
+                select(UserStory)
+                .where(UserStory.ur_id == ur.id)
+                .order_by(UserStory.created_at.asc())
+            )
+            stories = stories_result.scalars().all()
+            return [
+                {
+                    "story_id": s.story_id,
+                    "title": s.title,
+                    "persona": s.persona,
+                    "goal": s.goal,
+                    "business_value": s.business_value,
+                    "priority": s.priority,
+                    "estimate": s.estimate,
+                    "acceptance_criteria": s.acceptance_criteria,
+                    "invest_notes": s.invest_notes,
+                    "generated_by": s.generated_by,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                }
+                for s in stories
+            ]
+
+    @mcp.tool()
+    async def generate_user_stories(requirement_id: str) -> list[dict]:
+        """
+        AI-generate user stories for an approved requirement using BA Zone methodology.
+        Requirement must be in 'approved', 'dev_ready', or 'done' status.
+
+        Args:
+            requirement_id: The requirement_id (e.g. UR-2026-001) or UUID.
+        """
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
+        from sqlalchemy import func, select
+        from sqlalchemy.orm import selectinload
+
+        from app.database import async_session_factory
+        from app.database.models import UserRequirement, UserStory
+        from app.services.user_story_service import generate_user_stories as _ai_generate
+
+        ALLOWED = {"approved", "dev_ready", "done"}
+
+        async with async_session_factory() as session:
+            stmt = (
+                select(UserRequirement)
+                .options(selectinload(UserRequirement.project))
+                .where(UserRequirement.requirement_id == requirement_id)
+            )
+            result = await session.execute(stmt)
+            ur = result.scalar_one_or_none()
+            if not ur:
+                try:
+                    uid = _uuid.UUID(requirement_id)
+                    stmt2 = (
+                        select(UserRequirement)
+                        .options(selectinload(UserRequirement.project))
+                        .where(UserRequirement.id == uid)
+                    )
+                    result2 = await session.execute(stmt2)
+                    ur = result2.scalar_one_or_none()
+                except ValueError:
+                    pass
+            if not ur:
+                return [{"error": f"Requirement '{requirement_id}' not found"}]
+
+            if ur.status not in ALLOWED:
+                return [{"error": f"Status '{ur.status}' not eligible. Must be: {sorted(ALLOWED)}"}]
+
+            try:
+                story_dicts = await _ai_generate(ur, session)
+            except Exception as e:
+                return [{"error": f"AI generation failed: {e}"}]
+
+            if not story_dicts:
+                return [{"error": "AI returned no valid user stories"}]
+
+            created = []
+            for story_data in story_dicts:
+                year = datetime.now(timezone.utc).year
+                prefix = f"US-{year}-"
+                max_result = await session.execute(
+                    select(func.max(UserStory.story_id)).where(
+                        UserStory.story_id.like(f"{prefix}%")
+                    )
+                )
+                max_id = max_result.scalar()
+                if max_id:
+                    try:
+                        num = int(max_id.split("-")[-1]) + 1
+                    except (ValueError, IndexError):
+                        num = 1
+                else:
+                    num = 1
+                story_id = f"{prefix}{num:03d}"
+
+                story = UserStory(story_id=story_id, ur_id=ur.id, generated_by="ai", **story_data)
+                session.add(story)
+                await session.flush()
+                created.append({
+                    "story_id": story.story_id,
+                    "title": story.title,
+                    "persona": story.persona,
+                    "goal": story.goal,
+                    "priority": story.priority,
+                    "estimate": story.estimate,
+                    "created": True,
+                })
+
+            await session.commit()
+            return created
