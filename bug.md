@@ -1,153 +1,101 @@
 # UR Lifecycle Module — Bug Report
 
-**Date:** 2026-05-11  
-**Module:** UR Lifecycle (User Requirements)  
-**Branch:** claude/integrate-ur-lifecycle-6cnSN  
-**Status:** Fixed in commit `fix: all bugs from test report`
+**Branch:** `claude/integrate-ur-lifecycle-6cnSN`  
+**Last updated:** 2026-04-30 (re-test against commit `5b075ed`)
 
 ---
 
-## Critical Bugs
+## Summary
 
-### BUG-1 — ID collision on delete + re-insert (COUNT-based ID generation)
-
-**Files:** `app/routers/requirements.py`, `app/mcp/ur_tools.py`  
-**Severity:** High  
-**HTTP symptom:** 500 Internal Server Error on `POST /requirements` after any row was deleted
-
-`_generate_requirement_id` used `COUNT(*)` to determine the next sequence number. If any requirement was deleted, `COUNT` returned a lower value than the current max, causing a duplicate `UR-YYYY-NNN` that hit the unique constraint.
-
-**Fix:** Use `MAX(requirement_id)` and parse the trailing numeric suffix, then increment. Falls back to `001` when the table is empty.
-
----
-
-### BUG-2 — Race condition on concurrent requirement creation
-
-**File:** `app/routers/requirements.py`  
-**Severity:** High  
-**HTTP symptom:** 500 on second of two simultaneous `POST /requirements` calls
-
-Two requests could read the same `MAX` value and attempt to insert identical `requirement_id` strings.
-
-**Fix:** Wrap generate + insert in a retry loop (up to 5 attempts) catching `IntegrityError`. On conflict, re-generate the ID and re-fetch labels after rollback, then retry.
-
----
-
-### BUG-3 — Duplicate label name returns 500 instead of 409
-
-**File:** `app/routers/ur_labels.py`  
-**Severity:** Medium  
-**HTTP symptom:** 500 on `POST /ur-labels` with a name that already exists
-
-`URLabel.name` has a `UNIQUE` constraint. An unhandled `IntegrityError` from the flush bubbled up as HTTP 500. Same issue was present in `PUT /ur-labels/{id}` when renaming to an existing name.
-
-**Fix:** Wrap `await db.flush()` in `try/except IntegrityError` in both `create_label` and `update_label`; raise `HTTP 409 Conflict` with a descriptive message.
-
----
-
-### BUG-4 — PUT /requirements/{id} returns null for assignee_name and project_name
-
-**File:** `app/routers/requirements.py`  
-**Severity:** Medium  
-**HTTP symptom:** Response shows `"assignee_name": null` even after a successful update
-
-After `db.flush()`, SQLAlchemy's identity map cached the `UserRequirement` row. Calling `_load_ur()` hit the cache and returned the old (or un-loaded) relationship objects instead of issuing a fresh SELECT with `selectinload`.
-
-**Fix:** Call `db.expire(ur)` before `_load_ur()` in both `update_requirement` (PUT) and `update_status` (PATCH) to evict the cached instance and force a reload.
-
----
-
-### BUG-5 — Invalid UUID in path/query parameter returns 500 instead of 400
-
-**File:** `app/routers/requirements.py`  
-**Severity:** Medium  
-**HTTP symptom:** 500 on any endpoint when a UUID parameter is malformed (e.g. `?project_id=not-a-uuid`)
-
-Raw `uuid.UUID(value)` calls raised `ValueError` which propagated as HTTP 500.
-
-**Fix:** Added `_parse_uuid_field(value, field_name) -> Optional[uuid.UUID]` helper that raises `HTTP 400` with a descriptive message on `ValueError`. Applied to all UUID query params and path params.
-
----
-
-### BUG-6 — Non-existent FK (project_id / assignee_id) returns 500 instead of 400
-
-**File:** `app/routers/requirements.py`  
-**Severity:** Medium  
-**HTTP symptom:** 500 on `POST /requirements` when providing a valid UUID that references a missing row
-
-Providing a syntactically valid UUID for a non-existent `Project` or `Employee` caused a FK constraint violation on flush, resulting in HTTP 500.
-
-**Fix:** Before inserting, validate with `await db.get(Project, uuid)` and `await db.get(Employee, uuid)`; raise `HTTP 400` if the referenced row does not exist.
-
----
-
-### BUG-7 — Whitespace-only title returns 500 instead of 422
-
-**File:** `app/routers/requirements.py`  
-**Severity:** Low  
-**HTTP symptom:** 500 on `POST /requirements` with `{"title": "   "}`
-
-A whitespace-only string is truthy, so Pydantic's `required` check passed. After stripping, the empty string hit the DB `NOT NULL` / length constraint and caused a 500.
-
-**Fix:** Added `Field(..., min_length=1, max_length=500)` and a `@field_validator("title", mode="before")` that strips whitespace before the length check. Pydantic now returns HTTP 422 with a clear validation error.
-
----
-
-## Frontend Bugs
-
-### FE-1 — TypeScript build failure: Select.onValueChange may receive null
-
-**Files:** `frontend/src/app/(portal)/requirements/page.tsx`, `frontend/src/components/requirements/requirement-dialog.tsx`  
-**Severity:** High (build-breaking)  
-**Symptom:** TypeScript strict-mode error — `string | null` not assignable to `string` setter
-
-Passing a `setState` function directly to shadcn `Select.onValueChange` is unsafe because the component can emit `null` in some edge cases.
-
-**Fix:** Wrap all `onValueChange` handlers: `onValueChange={(v) => setState(v ?? "")}`.
-
----
-
-### FE-2 — ESLint error: multiple setState calls inside async effect
-
-**Files:** `frontend/src/components/requirements/requirement-dialog.tsx`, `frontend/src/app/(portal)/requirements/kanban/page.tsx`  
-**Severity:** Medium (lint-breaking)
-
-- **Dialog:** `useEffect` contained 6 sequential `setState` calls triggering `react-hooks/exhaustive-deps` lint errors.  
-  **Fix:** Consolidated into a single `setForm({...})` call using a typed `FormState` object.
-
-- **Kanban:** `useCallback` wrapped an `async` function with multiple setState calls (`setLoading`, `setRequirements`).  
-  **Fix:** Replaced with `useTransition` — the async work runs inside `startTransition`, eliminating the separate `loading` state and using `isPending` from `useTransition` for the spinner.
-
----
-
-## Design / Code Quality Issues
-
-### DESIGN-3 — `import uuid` placed inside a for-loop
-
-**File:** `app/routers/jira_integration.py`  
-**Severity:** Low
-
-`import uuid` appeared inside `for req_id_str in data.requirement_ids:`. Python caches imports after the first call so there is no runtime cost, but it is unconventional and triggers linting warnings.
-
-**Fix:** Moved `import uuid` to the top of the file with other standard-library imports.
-
----
-
-### DESIGN-4 — MCP tools missing `source_document` selectinload
-
-**File:** `app/mcp/ur_tools.py`  
-**Severity:** Low  
-**Symptom:** `MissingGreenlet` / lazy-load error if `source_document` is accessed outside an async context
-
-`list_requirements` and `read_requirement` did not eagerly load the `source_document` relationship.
-
-**Fix:** Added `selectinload(UserRequirement.source_document)` to all SELECT statements in both tools. Also fixed the same COUNT→MAX bug in MCP `create_requirement`.
-
----
-
-## Out of Scope (Not Fixed)
-
-| ID | Description | Reason |
+| ID | Description | Status |
 |----|-------------|--------|
-| DESIGN-1 | RBAC permissions for UR module | Requires product decision on permission model |
-| DESIGN-2 | Drag-and-drop Kanban board | Requires dnd-kit or @hello-pangea/dnd dependency |
+| BUG-1 | ID collision after delete (COUNT → MAX) | ✅ Fixed |
+| BUG-2 | Race condition on concurrent creation | ✅ Fixed |
+| BUG-3 | Duplicate label name → 500 | ✅ Fixed |
+| BUG-4 | PUT/PATCH returns stale null for relations | ✅ Fixed (2nd attempt) |
+| BUG-5 | Invalid UUID → 500 instead of 400 | ✅ Fixed |
+| BUG-6 | Non-existent FK → 500 instead of 400 | ✅ Fixed |
+| BUG-7 | Empty/whitespace title → 500 instead of 422 | ✅ Fixed |
+| FE-BUG-1 | TypeScript Select `onValueChange` null | ✅ Fixed |
+| FE-BUG-2 | ESLint setState in useEffect (Kanban) | ✅ Fixed |
+| FE-BUG-3 | ESLint setState in useEffect (Dialog) | ✅ Fixed (2nd attempt) |
+| FE-BUG-4 | `asChild` on DropdownMenuTrigger build failure | ✅ Fixed |
+| DESIGN-3 | `import uuid` inside for-loop | ✅ Fixed |
+| DESIGN-4 | MCP tools missing source_document selectinload | ✅ Fixed |
+| MCP-BUG-2 | MCP create_requirement missing retry loop | ✅ Fixed |
+
+---
+
+## BUG-4 — Regression in first fix attempt
+
+**Root cause of regression:** `db.expire(ur)` marks **all** attributes of `ur` as expired,
+including `ur.id`. Accessing `ur.id` after expire triggers SQLAlchemy's lazy-load mechanism,
+which cannot run in an async context outside a greenlet, causing:
+
+```
+MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here.
+```
+
+**Fix (2nd attempt):** Save `ur_id = ur.id` to a local variable **before** calling
+`db.expire(ur)`, then pass the local variable to `_load_ur`:
+
+```python
+await db.flush()
+ur_id = ur.id          # capture before expire invalidates it
+db.expire(ur)
+return _ur_out(await _load_ur(db, ur_id))
+```
+
+Applied in both `update_requirement` (PUT) and `update_status` (PATCH /status).
+
+---
+
+## FE-BUG-3 — Regression in first fix attempt
+
+**Root cause:** Consolidating 6 `setState` calls into one `setForm({...})` still calls
+`setState` synchronously inside the `useEffect` body, which `react-hooks/set-state-in-effect`
+still flags.
+
+**Fix (2nd attempt):** Use the **key-prop + lazy initializer** pattern:
+- Dialog initializes `form` via lazy `useState(() => ...)` from `requirement` prop on first render.
+- Parent (`requirements/page.tsx`) increments a `dialogKey` counter each time the dialog opens.
+- React remounts `RequirementDialog` on each open (new key), so the lazy init runs fresh
+  with the latest `requirement` prop.
+- The `useEffect` now only handles the async `Promise.all` fetch (state set in `.then()`,
+  not synchronously in the effect body — allowed by the rule).
+
+---
+
+## FE-BUG-4 — New issue: `asChild` on Base UI DropdownMenuTrigger
+
+**Location:** `frontend/src/components/requirements/requirement-list.tsx:151`
+
+```
+Type error: Property 'asChild' does not exist on type '...'
+```
+
+**Root cause:** The project's `DropdownMenuTrigger` wraps Base UI's `Menu.Trigger`,
+which uses the `render` prop for slot composition, **not** Radix UI's `asChild`.
+
+**Fix:** Remove `asChild` and the nested `<button>` wrapper; apply styling directly
+to `DropdownMenuTrigger` (Base UI renders a button by default):
+
+```tsx
+<DropdownMenuTrigger
+  className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", statusCfg.className)}
+>
+  {statusCfg.label}
+</DropdownMenuTrigger>
+```
+
+---
+
+## MCP-BUG-2 — Missing retry loop in MCP create_requirement
+
+**File:** `app/mcp/ur_tools.py`
+
+The HTTP router's `create_requirement` had a 5-attempt retry loop added for BUG-2,
+but the MCP tool equivalent did not receive the same treatment, leaving it vulnerable
+to the same race condition.
+
+**Fix:** Added the same MAX-based ID generation + 5-attempt IntegrityError retry loop.

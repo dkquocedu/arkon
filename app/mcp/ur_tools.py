@@ -4,6 +4,8 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
+_MCP_ID_RETRIES = 5
+
 
 def register_ur_tools(mcp: FastMCP) -> None:
     """Register UR Lifecycle tools on the MCP server."""
@@ -163,40 +165,53 @@ def register_ur_tools(mcp: FastMCP) -> None:
         from datetime import datetime, timezone
 
         from sqlalchemy import func, select
+        from sqlalchemy.exc import IntegrityError
 
         from app.database import async_session_factory
         from app.database.models import UserRequirement
 
         async with async_session_factory() as session:
-            year = datetime.now(timezone.utc).year
-            prefix = f"UR-{year}-"
-            max_stmt = (
-                select(func.max(UserRequirement.requirement_id))
-                .where(UserRequirement.requirement_id.like(f"{prefix}%"))
-            )
-            max_result = await session.execute(max_stmt)
-            max_id = max_result.scalar()
-            if max_id:
+            ur: UserRequirement | None = None
+            for attempt in range(_MCP_ID_RETRIES):
                 try:
-                    num = int(max_id.split("-")[-1]) + 1
-                except (ValueError, IndexError):
-                    num = 1
-            else:
-                num = 1
-            req_id = f"{prefix}{num:03d}"
+                    year = datetime.now(timezone.utc).year
+                    prefix = f"UR-{year}-"
+                    max_stmt = (
+                        select(func.max(UserRequirement.requirement_id))
+                        .where(UserRequirement.requirement_id.like(f"{prefix}%"))
+                    )
+                    max_result = await session.execute(max_stmt)
+                    max_id = max_result.scalar()
+                    if max_id:
+                        try:
+                            num = int(max_id.split("-")[-1]) + 1
+                        except (ValueError, IndexError):
+                            num = 1
+                    else:
+                        num = 1
+                    req_id = f"{prefix}{num:03d}"
 
-            ur = UserRequirement(
-                requirement_id=req_id,
-                title=title,
-                description=description,
-                acceptance_criteria=acceptance_criteria,
-                priority=priority,
-                source_text=source_text,
-                status="draft",
-            )
-            session.add(ur)
-            await session.flush()
-            await session.commit()
+                    ur = UserRequirement(
+                        requirement_id=req_id,
+                        title=title,
+                        description=description,
+                        acceptance_criteria=acceptance_criteria,
+                        priority=priority,
+                        source_text=source_text,
+                        status="draft",
+                    )
+                    session.add(ur)
+                    await session.flush()
+                    await session.commit()
+                    break
+                except IntegrityError:
+                    await session.rollback()
+                    if attempt == _MCP_ID_RETRIES - 1:
+                        return {"error": "Could not generate a unique requirement ID after retries"}
+
+            if ur is None:
+                return {"error": "Could not create requirement"}
+
             return {
                 "id": str(ur.id),
                 "requirement_id": ur.requirement_id,

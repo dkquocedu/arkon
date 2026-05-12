@@ -49,31 +49,23 @@ type Props = {
   onSaved: () => void;
 };
 
-const EMPTY_FORM: FormState = {
-  title: "",
-  description: "",
-  acceptanceCriteria: "",
-  priority: "medium",
-  projectId: "",
-  assigneeId: "",
-};
-
 export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  // Lazy initializer runs on mount; parent uses key prop to remount on each open
+  const [form, setForm] = useState<FormState>(() => ({
+    title: requirement?.title ?? "",
+    description: requirement?.description ?? "",
+    acceptanceCriteria: requirement?.acceptance_criteria ?? "",
+    priority: requirement?.priority ?? "medium",
+    projectId: requirement?.project_id ?? "",
+    assigneeId: requirement?.assignee_id ?? "",
+  }));
 
   useEffect(() => {
     if (!open) return;
-    setForm({
-      title: requirement?.title ?? "",
-      description: requirement?.description ?? "",
-      acceptanceCriteria: requirement?.acceptance_criteria ?? "",
-      priority: requirement?.priority ?? "medium",
-      projectId: requirement?.project_id ?? "",
-      assigneeId: requirement?.assignee_id ?? "",
-    });
+    // setState calls here are inside .then() (async), not synchronous in the effect body
     Promise.all([
       api<Project[]>("/api/projects").catch(() => []),
       api<Employee[] | { items: Employee[] }>("/api/employees").catch(() => []),
@@ -81,7 +73,7 @@ export function RequirementDialog({ requirement, open, onOpenChange, onSaved }: 
       setProjects(p);
       setEmployees(Array.isArray(e) ? e : ((e as { items: Employee[] }).items ?? []));
     });
-  }, [open, requirement]);
+  }, [open]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

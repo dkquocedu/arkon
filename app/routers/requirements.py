@@ -361,7 +361,6 @@ async def create_requirement(
                 raise HTTPException(
                     500, "Could not generate a unique requirement ID after retries"
                 )
-            # Re-fetch labels after rollback since session state is reset
             if data.label_ids:
                 label_uuids = [uuid.UUID(lid) for lid in data.label_ids]
                 res = await db.execute(select(URLabel).where(URLabel.id.in_(label_uuids)))
@@ -409,8 +408,9 @@ async def update_requirement(
             setattr(ur, field, value)
 
     await db.flush()
-    db.expire(ur)  # force SQLAlchemy to reload relationships from DB
-    return _ur_out(await _load_ur(db, ur.id))
+    ur_id = ur.id  # capture before expire invalidates the attribute
+    db.expire(ur)
+    return _ur_out(await _load_ur(db, ur_id))
 
 
 @router.patch("/requirements/{requirement_id}/status", response_model=UROut)
@@ -434,8 +434,9 @@ async def update_status(
     if data.status == "approved":
         ur.approved_at = datetime.now(timezone.utc)
     await db.flush()
-    db.expire(ur)  # force reload relationships
-    return _ur_out(await _load_ur(db, ur.id))
+    ur_id = ur.id  # capture before expire invalidates the attribute
+    db.expire(ur)
+    return _ur_out(await _load_ur(db, ur_id))
 
 
 @router.delete("/requirements/{requirement_id}", status_code=204)

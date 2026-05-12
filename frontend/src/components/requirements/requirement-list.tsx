@@ -148,15 +148,13 @@ export function RequirementList({
                 <td className="py-2.5 px-3">
                   {req.valid_transitions.length > 0 ? (
                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          className={cn(
-                            "rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors",
-                            statusCfg.className
-                          )}
-                        >
-                          {statusCfg.label}
-                        </button>
+                      <DropdownMenuTrigger
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors",
+                          statusCfg.className
+                        )}
+                      >
+                        {statusCfg.label}
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="text-sm">
                         {req.valid_transitions.map((t) => (

@@ -25,6 +25,7 @@ export default function RequirementsPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogKey, setDialogKey] = useState(0);
   const [editingReq, setEditingReq] = useState<ListRequirement | null>(null);
 
   const loadRequirements = useCallback(async () => {
@@ -73,11 +74,13 @@ export default function RequirementsPage() {
 
   const openCreate = () => {
     setEditingReq(null);
+    setDialogKey((k) => k + 1);
     setDialogOpen(true);
   };
 
   const openEdit = (req: ListRequirement) => {
     setEditingReq(req);
+    setDialogKey((k) => k + 1);
     setDialogOpen(true);
   };
 
@@ -185,7 +188,9 @@ export default function RequirementsPage() {
         />
       </div>
 
+      {/* key increments on each open, remounting dialog so lazy state init re-runs */}
       <RequirementDialog
+        key={dialogKey}
         requirement={editingReq}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
