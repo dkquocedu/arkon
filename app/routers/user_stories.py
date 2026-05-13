@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,13 +44,20 @@ class UserStoryOut(BaseModel):
 
 
 class UserStoryCreate(BaseModel):
-    title: str
+    title: str = Field(..., min_length=1, max_length=500)
     persona: str
     goal: str
     business_value: str
     priority: str = "must"
     estimate: Optional[str] = None
     acceptance_criteria: str
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, v: str) -> str:
+        if isinstance(v, str):
+            v = v.strip()
+        return v
 
 
 class UserStoryUpdate(BaseModel):
@@ -165,17 +172,31 @@ async def generate_user_stories(
 
     from app.services.user_story_service import generate_user_stories as _ai_generate
 
-    story_dicts = await _ai_generate(ur, db)
+    try:
+        story_dicts = await _ai_generate(ur, db)
+    except ValueError as e:
+        raise HTTPException(502, f"AI provider not configured: {e}")
+    except Exception as e:
+        raise HTTPException(502, f"AI generation failed: {e}")
+
     if not story_dicts:
         raise HTTPException(500, "AI returned no valid user stories")
 
     created: list[UserStory] = []
     for story_data in story_dicts:
-        story_id = await _next_story_id(db)
-        story = UserStory(story_id=story_id, ur_id=ur_uuid, generated_by="ai", **story_data)
-        db.add(story)
-        await db.flush()
-        created.append(story)
+        for attempt in range(_MAX_ID_RETRIES):
+            try:
+                story_id = await _next_story_id(db)
+                story = UserStory(story_id=story_id, ur_id=ur_uuid, generated_by="ai", **story_data)
+                db.add(story)
+                await db.flush()
+                created.append(story)
+                break
+            except IntegrityError:
+                await db.rollback()
+                created.clear()  # rollback invalidates all previously flushed stories
+                if attempt == _MAX_ID_RETRIES - 1:
+                    raise HTTPException(500, "Could not generate unique story ID after retries")
 
     return [_story_out(s) for s in created]
 
@@ -239,6 +260,7 @@ async def update_user_story(
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(story, field, value)
     await db.flush()
+    await db.refresh(story)  # reload server-computed updated_at to avoid MissingGreenlet
     return _story_out(story)
 
 

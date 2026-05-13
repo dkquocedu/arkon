@@ -423,6 +423,7 @@ def register_ur_tools(mcp: FastMCP) -> None:
         from datetime import datetime, timezone
 
         from sqlalchemy import func, select
+        from sqlalchemy.exc import IntegrityError
         from sqlalchemy.orm import selectinload
 
         from app.database import async_session_factory
@@ -465,37 +466,52 @@ def register_ur_tools(mcp: FastMCP) -> None:
             if not story_dicts:
                 return [{"error": "AI returned no valid user stories"}]
 
+            # Save ur.id before any potential session state changes
+            ur_id_val = ur.id
             created = []
             for story_data in story_dicts:
-                year = datetime.now(timezone.utc).year
-                prefix = f"US-{year}-"
-                max_result = await session.execute(
-                    select(func.max(UserStory.story_id)).where(
-                        UserStory.story_id.like(f"{prefix}%")
-                    )
-                )
-                max_id = max_result.scalar()
-                if max_id:
+                for attempt in range(_MCP_ID_RETRIES):
                     try:
-                        num = int(max_id.split("-")[-1]) + 1
-                    except (ValueError, IndexError):
-                        num = 1
-                else:
-                    num = 1
-                story_id = f"{prefix}{num:03d}"
+                        year = datetime.now(timezone.utc).year
+                        prefix = f"US-{year}-"
+                        max_result = await session.execute(
+                            select(func.max(UserStory.story_id)).where(
+                                UserStory.story_id.like(f"{prefix}%")
+                            )
+                        )
+                        max_id = max_result.scalar()
+                        if max_id:
+                            try:
+                                num = int(max_id.split("-")[-1]) + 1
+                            except (ValueError, IndexError):
+                                num = 1
+                        else:
+                            num = 1
+                        story_id = f"{prefix}{num:03d}"
 
-                story = UserStory(story_id=story_id, ur_id=ur.id, generated_by="ai", **story_data)
-                session.add(story)
-                await session.flush()
-                created.append({
-                    "story_id": story.story_id,
-                    "title": story.title,
-                    "persona": story.persona,
-                    "goal": story.goal,
-                    "priority": story.priority,
-                    "estimate": story.estimate,
-                    "created": True,
-                })
+                        story = UserStory(
+                            story_id=story_id,
+                            ur_id=ur_id_val,
+                            generated_by="ai",
+                            **story_data,
+                        )
+                        session.add(story)
+                        await session.flush()
+                        created.append({
+                            "story_id": story.story_id,
+                            "title": story.title,
+                            "persona": story.persona,
+                            "goal": story.goal,
+                            "priority": story.priority,
+                            "estimate": story.estimate,
+                            "created": True,
+                        })
+                        break
+                    except IntegrityError:
+                        await session.rollback()
+                        created.clear()
+                        if attempt == _MCP_ID_RETRIES - 1:
+                            return [{"error": "Could not generate unique story ID after retries"}]
 
             await session.commit()
             return created

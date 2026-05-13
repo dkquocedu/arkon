@@ -1,7 +1,7 @@
-# UR Lifecycle Module — Bug Report
+# UR Lifecycle & User Story Module — Bug Report
 
-**Branch:** `claude/integrate-ur-lifecycle-6cnSN`  
-**Last updated:** 2026-04-30 (re-test against commit `5b075ed`)
+**Branch:** `claude/ur-user-story-generation`  
+**Last updated:** 2026-05-13
 
 ---
 
@@ -23,79 +23,104 @@
 | DESIGN-3 | `import uuid` inside for-loop | ✅ Fixed |
 | DESIGN-4 | MCP tools missing source_document selectinload | ✅ Fixed |
 | MCP-BUG-2 | MCP create_requirement missing retry loop | ✅ Fixed |
+| BUG-US-1 | PUT `/user-stories/{id}` → 500 MissingGreenlet | ✅ Fixed |
+| BUG-US-2 | Generate endpoint 500 when AI provider not configured | ✅ Fixed |
+| FE-BUG-US-1 | PageHeader `description` type mismatch (string vs ReactNode) | ✅ Fixed |
+| FE-BUG-US-2 | ESLint unescaped quotes in user-story-panel.tsx | ✅ Fixed |
+| LINT-1 | Ruff import ordering in health functions | ✅ Fixed |
+| DESIGN-US-1 | Empty title accepted in UserStoryCreate | ✅ Fixed |
+| DESIGN-US-2 | Generate endpoint missing retry loop for story_id collision | ✅ Fixed |
+| DESIGN-US-3 | MCP generate_user_stories missing retry loop | ✅ Fixed |
+
+---
+
+## BUG-US-1 — PUT `/user-stories/{id}` → 500 MissingGreenlet
+
+**File:** `app/routers/user_stories.py`  
+**Root cause:** Same pattern as BUG-4. After `db.flush()`, SQLAlchemy expires `updated_at`
+(column has `onupdate=func.now()`). When `_story_out(story)` accesses `s.updated_at.isoformat()`,
+it triggers lazy-load in async context → crash:
+```
+MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here.
+```
+**Fix:** Add `await db.refresh(story)` after `flush()` to reload server-computed columns:
+```python
+await db.flush()
+await db.refresh(story)  # reload updated_at from DB
+return _story_out(story)
+```
+
+---
+
+## BUG-US-2 — Generate endpoint 500 when AI provider not configured
+
+**File:** `app/routers/user_stories.py`  
+**Root cause:** `generate_user_stories()` raises `ValueError("No llm provider configured")`
+but the router endpoint did not catch it, resulting in an unhandled 500.  
+**Fix:** Wrap `_ai_generate()` in try/except and return 502:
+```python
+try:
+    story_dicts = await _ai_generate(ur, db)
+except ValueError as e:
+    raise HTTPException(502, f"AI provider not configured: {e}")
+except Exception as e:
+    raise HTTPException(502, f"AI generation failed: {e}")
+```
+
+---
+
+## FE-BUG-US-1 — PageHeader `description` type mismatch
+
+**File:** `frontend/src/components/shared/page-header.tsx`  
+**Root cause:** `description?: string` but UR detail page passes a `<Link>` ReactNode.  
+**Fix:** Change type to `React.ReactNode` and wrap render element in `<div>` instead of `<p>`:
+```tsx
+description?: React.ReactNode;
+```
+
+---
+
+## FE-BUG-US-2 — ESLint unescaped quotes in JSX
+
+**File:** `frontend/src/components/requirements/user-story-panel.tsx`  
+**Root cause:** Raw `"` characters inside JSX text content.  
+**Fix:** Use template literal or `&quot;` escape.
+
+---
+
+## DESIGN-US-1 — Empty title accepted in UserStoryCreate
+
+**File:** `app/routers/user_stories.py`  
+**Fix:** Added `Field(..., min_length=1, max_length=500)` + `@field_validator` strip.
+
+---
+
+## DESIGN-US-2/3 — Generate endpoints missing retry loop for story_id collision
+
+**Files:** `app/routers/user_stories.py`, `app/mcp/ur_tools.py`  
+**Fix:** Added `_MAX_ID_RETRIES` retry loop with `IntegrityError` handling, same pattern
+as `create_user_story` and MCP `create_requirement`.
 
 ---
 
 ## BUG-4 — Regression in first fix attempt
 
-**Root cause of regression:** `db.expire(ur)` marks **all** attributes of `ur` as expired,
-including `ur.id`. Accessing `ur.id` after expire triggers SQLAlchemy's lazy-load mechanism,
-which cannot run in an async context outside a greenlet, causing:
+**Root cause:** `db.expire(ur)` marks **all** attributes of `ur` as expired,
+including `ur.id`. Accessing `ur.id` after expire triggers lazy-load in async context.
 
-```
-MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here.
-```
-
-**Fix (2nd attempt):** Save `ur_id = ur.id` to a local variable **before** calling
-`db.expire(ur)`, then pass the local variable to `_load_ur`:
-
-```python
-await db.flush()
-ur_id = ur.id          # capture before expire invalidates it
-db.expire(ur)
-return _ur_out(await _load_ur(db, ur_id))
-```
-
-Applied in both `update_requirement` (PUT) and `update_status` (PATCH /status).
+**Fix (2nd attempt):** Save `ur_id = ur.id` **before** calling `db.expire(ur)`.
 
 ---
 
 ## FE-BUG-3 — Regression in first fix attempt
 
-**Root cause:** Consolidating 6 `setState` calls into one `setForm({...})` still calls
-`setState` synchronously inside the `useEffect` body, which `react-hooks/set-state-in-effect`
-still flags.
-
-**Fix (2nd attempt):** Use the **key-prop + lazy initializer** pattern:
-- Dialog initializes `form` via lazy `useState(() => ...)` from `requirement` prop on first render.
-- Parent (`requirements/page.tsx`) increments a `dialogKey` counter each time the dialog opens.
-- React remounts `RequirementDialog` on each open (new key), so the lazy init runs fresh
-  with the latest `requirement` prop.
-- The `useEffect` now only handles the async `Promise.all` fetch (state set in `.then()`,
-  not synchronously in the effect body — allowed by the rule).
+**Fix (2nd attempt):** Use **key-prop + lazy initializer** pattern:
+- Dialog initializes `form` via lazy `useState(() => ...)` from `requirement` prop.
+- Parent increments `dialogKey` counter on each open → React remounts dialog → lazy init re-runs.
 
 ---
 
-## FE-BUG-4 — New issue: `asChild` on Base UI DropdownMenuTrigger
+## FE-BUG-4 — `asChild` on Base UI DropdownMenuTrigger
 
-**Location:** `frontend/src/components/requirements/requirement-list.tsx:151`
-
-```
-Type error: Property 'asChild' does not exist on type '...'
-```
-
-**Root cause:** The project's `DropdownMenuTrigger` wraps Base UI's `Menu.Trigger`,
-which uses the `render` prop for slot composition, **not** Radix UI's `asChild`.
-
-**Fix:** Remove `asChild` and the nested `<button>` wrapper; apply styling directly
-to `DropdownMenuTrigger` (Base UI renders a button by default):
-
-```tsx
-<DropdownMenuTrigger
-  className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", statusCfg.className)}
->
-  {statusCfg.label}
-</DropdownMenuTrigger>
-```
-
----
-
-## MCP-BUG-2 — Missing retry loop in MCP create_requirement
-
-**File:** `app/mcp/ur_tools.py`
-
-The HTTP router's `create_requirement` had a 5-attempt retry loop added for BUG-2,
-but the MCP tool equivalent did not receive the same treatment, leaving it vulnerable
-to the same race condition.
-
-**Fix:** Added the same MAX-based ID generation + 5-attempt IntegrityError retry loop.
+**Root cause:** Project uses Base UI `Menu.Trigger` which uses `render` prop, not Radix `asChild`.  
+**Fix:** Remove `asChild` + inner `<button>`, apply className directly to `DropdownMenuTrigger`.

@@ -111,7 +111,7 @@ export function UserStoryPanel({ urId, urStatus }: Props) {
           </span>
           <p className="text-sm">No user stories yet.</p>
           {canGenerate && (
-            <p className="text-xs opacity-60">Click \"Generate User Stories\" to create them with AI.</p>
+            <p className="text-xs opacity-60">{`Click "Generate User Stories" to create them with AI.`}</p>
           )}
           {!canGenerate && (
             <p className="text-xs opacity-60">Approve this requirement to unlock AI story generation.</p>

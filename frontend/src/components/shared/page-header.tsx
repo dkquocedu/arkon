@@ -1,6 +1,6 @@
 type PageHeaderProps = {
   title: string;
-  description?: string;
+  description?: React.ReactNode;
   action?: React.ReactNode;
 };
 
@@ -12,9 +12,9 @@ export function PageHeader({ title, description, action }: PageHeaderProps) {
           {title}
         </h2>
         {description && (
-          <p className="text-muted-foreground text-sm mt-1 max-w-xl">
+          <div className="text-muted-foreground text-sm mt-1 max-w-xl">
             {description}
-          </p>
+          </div>
         )}
       </div>
       {action && <div className="mt-3 sm:mt-0">{action}</div>}
