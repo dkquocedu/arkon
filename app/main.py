@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
 
         try:
             from app.services.storage_service import storage_service
+
             await storage_service.ensure_bucket()
             logger.success("MinIO bucket ready")
         except Exception as e:
@@ -154,7 +155,9 @@ async def health():
 
     try:
         from sqlalchemy import text
+
         from app.database import async_session_factory
+
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
         services["database"] = "healthy"
@@ -165,6 +168,7 @@ async def health():
 
     try:
         from app.routers.sources import get_arq_pool
+
         pool = await get_arq_pool()
         await pool.ping()
         services["redis"] = "healthy"
@@ -175,6 +179,7 @@ async def health():
 
     try:
         from app.services.storage_service import storage_service
+
         await storage_service.ensure_bucket()
         services["minio"] = "healthy"
     except Exception as e:
@@ -188,6 +193,7 @@ async def health():
 @app.get("/api/health")
 async def api_health():
     from sqlalchemy import text
+
     from app.database import async_session_factory
 
     result = {"api": "healthy", "database": "error", "worker": "error"}
@@ -201,6 +207,7 @@ async def api_health():
 
     try:
         import redis.asyncio as aioredis
+
         r = aioredis.Redis(
             host=settings.redis_host,
             port=settings.redis_port,
