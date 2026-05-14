@@ -1,0 +1,186 @@
+name: Deploy to Cloud Run
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Required GitHub Repository Variables  (Settings → Secrets and variables → Actions → Variables)
+#   GCP_PROJECT_ID        – your GCP project ID
+#   GCP_REGION            – e.g. asia-southeast1
+#   CLOUD_SQL_INSTANCE    – PROJECT:REGION:INSTANCE  e.g. my-proj:asia-southeast1:arkon-db
+#   VPC_CONNECTOR         – full resource name OR connector id
+#                           e.g. projects/my-proj/locations/asia-southeast1/connectors/arkon-vpc
+#   DB_USER               – Cloud SQL user name  (e.g. arkon)
+#   DB_NAME               – Cloud SQL database name  (e.g. arkon)
+#   REDIS_HOST            – Cloud Memorystore private IP  (e.g. 10.10.0.3)
+#   GCS_BUCKET            – Cloud Storage bucket name  (e.g. arkon-files)
+#   GCS_HMAC_ACCESS_KEY   – HMAC access key ID for GCS S3-compatible access
+#   CORS_ORIGINS          – allowed origins  (e.g. https://arkon.example.com)
+#   DEFAULT_ADMIN_EMAIL   – initial admin account email
+#   NEXT_PUBLIC_API_URL   – public API URL seen by the browser
+#                           leave empty to auto-use the Cloud Run API URL
+#   INTERNAL_API_URL      – (optional) stable custom domain for API
+#                           leave empty to auto-use the Cloud Run API URL
+#
+# Required GitHub Repository Secrets  (Settings → Secrets and variables → Actions → Secrets)
+#   WIF_PROVIDER          – Workload Identity Federation provider
+#                           e.g. projects/123/locations/global/workloadIdentityPools/github/providers/github
+#   WIF_SERVICE_ACCOUNT   – service account email used for deployment
+#                           e.g. arkon-deployer@my-proj.iam.gserviceaccount.com
+#   DB_PASSWORD           – Cloud SQL user password
+#   SECRET_KEY            – JWT signing key (generate: python -c "import secrets; print(secrets.token_urlsafe(32))")
+#   REDIS_PASSWORD        – Cloud Memorystore auth string (leave empty if auth disabled)
+#   GCS_HMAC_SECRET_KEY   – HMAC secret key for GCS S3-compatible access
+#   DEFAULT_ADMIN_PASSWORD – initial admin account password
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  REGISTRY: ${{ vars.GCP_REGION }}-docker.pkg.dev
+  AR_REPO: arkon
+  API_SERVICE: arkon-api
+  FRONTEND_SERVICE: arkon-frontend
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
+
+    steps:
+      # ── Setup ───────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Backend ─────────────────────────────────────────────────────────────
+      - name: Build & Push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/api:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/api:latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/api:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/api:cache,mode=max
+
+      - name: Deploy API to Cloud Run
+        id: deploy-api
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.API_SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/api:${{ github.sha }}
+          flags: >-
+            --add-cloudsql-instances=${{ vars.CLOUD_SQL_INSTANCE }}
+            --vpc-connector=${{ vars.VPC_CONNECTOR }}
+            --vpc-egress=private-ranges-only
+            --min-instances=1
+            --max-instances=10
+            --memory=1Gi
+            --cpu=1
+            --port=5055
+            --allow-unauthenticated
+            --concurrency=80
+          env_vars: |
+            DATABASE_URL=postgresql+asyncpg://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@/${{ vars.DB_NAME }}?host=/cloudsql/${{ vars.CLOUD_SQL_INSTANCE }}
+            SECRET_KEY=${{ secrets.SECRET_KEY }}
+            REDIS_HOST=${{ vars.REDIS_HOST }}
+            REDIS_PORT=6379
+            REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+            REDIS_DB=0
+            WORKER_MAX_JOBS=3
+            WORKER_JOB_TIMEOUT=600
+            CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
+            MINIO_ENDPOINT=storage.googleapis.com
+            MINIO_ACCESS_KEY=${{ vars.GCS_HMAC_ACCESS_KEY }}
+            MINIO_SECRET_KEY=${{ secrets.GCS_HMAC_SECRET_KEY }}
+            MINIO_BUCKET=${{ vars.GCS_BUCKET }}
+            MINIO_SECURE=true
+            MINIO_PRESIGN_EXPIRY_HOURS=24
+            DEFAULT_ADMIN_EMAIL=${{ vars.DEFAULT_ADMIN_EMAIL }}
+            DEFAULT_ADMIN_PASSWORD=${{ secrets.DEFAULT_ADMIN_PASSWORD }}
+
+      # ── Frontend ────────────────────────────────────────────────────────────
+      # next.config.ts reads INTERNAL_API_URL at build time for the /api rewrite.
+      # We prefer an explicit var (stable custom domain); fall back to the
+      # Cloud Run service URL from the previous step.
+      - name: Resolve internal API URL
+        id: api-url
+        run: |
+          INTERNAL="${{ vars.INTERNAL_API_URL }}"
+          if [ -z "$INTERNAL" ]; then
+            INTERNAL="${{ steps.deploy-api.outputs.url }}"
+          fi
+          PUBLIC="${{ vars.NEXT_PUBLIC_API_URL }}"
+          if [ -z "$PUBLIC" ]; then
+            PUBLIC="$INTERNAL"
+          fi
+          echo "internal=$INTERNAL" >> "$GITHUB_OUTPUT"
+          echo "public=$PUBLIC" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ steps.api-url.outputs.public }}
+            INTERNAL_API_URL=${{ steps.api-url.outputs.internal }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:cache,mode=max
+
+      - name: Deploy Frontend to Cloud Run
+        id: deploy-frontend
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.FRONTEND_SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:${{ github.sha }}
+          flags: >-
+            --min-instances=0
+            --max-instances=5
+            --memory=512Mi
+            --cpu=1
+            --port=3000
+            --allow-unauthenticated
+            --concurrency=100
+          env_vars: |
+            NODE_ENV=production
+
+      # ── Summary ─────────────────────────────────────────────────────────────
+      - name: Deployment summary
+        run: |
+          echo "### Deployment complete :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Service | URL |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------|-----|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| API | ${{ steps.deploy-api.outputs.url }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Frontend | ${{ steps.deploy-frontend.outputs.url }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit: ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
